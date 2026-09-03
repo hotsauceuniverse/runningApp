@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">runningProject</string>
+    <style name="BottomNavigationText">
+        <item name="android:textSize">16dp</item>
+    </style>
+</resources>
