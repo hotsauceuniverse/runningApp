@@ -7,6 +7,17 @@ import android.widget.ImageView
 import android.widget.TextView
 
 import androidx.appcompat.app.AppCompatActivity
+import com.kakao.vectormap.KakaoMap
+import com.kakao.vectormap.KakaoMapReadyCallback
+import com.kakao.vectormap.MapLifeCycleCallback
+import com.kakao.vectormap.MapView
+import com.kakao.vectormap.KakaoMapSdk
+import com.kakao.vectormap.LatLng
+import com.kakao.vectormap.shape.MapPoints
+import com.kakao.vectormap.shape.Polyline
+import com.kakao.vectormap.shape.PolylineOptions
+import android.graphics.Color
+import com.kakao.vectormap.camera.CameraUpdateFactory
 
 class RunningResultActivity : AppCompatActivity() {
 
@@ -17,7 +28,14 @@ class RunningResultActivity : AppCompatActivity() {
     private lateinit var elevationGainTv: TextView
     private lateinit var cadenceTv: TextView
     private lateinit var averageSpeedTv: TextView
-    private lateinit var resultMapImage: ImageView
+
+    // 결과 화면 카카오 지도
+    private lateinit var resultMap: MapView
+    private var kakaoMap: KakaoMap? = null
+
+    // 러닝 경로
+    private var runningPath = mutableListOf<LatLng>()
+    private var runningPolyline: Polyline? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,32 +48,57 @@ class RunningResultActivity : AppCompatActivity() {
         elevationGainTv = findViewById(R.id.distance_tv)
         cadenceTv = findViewById(R.id.cadence_tv)
         averageSpeedTv = findViewById(R.id.averageSpeed_tv)
-        resultMapImage = findViewById(R.id.result_map_image)
 
+        // Kakao MapView 연결
+        resultMap = findViewById(R.id.result_map_image)
+        KakaoMapSdk.init(
+            this,
+            BuildConfig.KAKAO_MAP_KEY
+        )
+
+        // 러닝 데이터
         runningData()
-        showMapImage()
-    }
 
-    // =========================
-    // 저장된 지도 이미지 표시
-    // =========================
-    private fun showMapImage() {
+        // 러닝 경로 받기
+        getRunningPath()
 
-        val imagePath = intent.getStringExtra("MAP_IMAGE_PATH")
+        // 지도 시작
+        resultMap.start(
+            object : MapLifeCycleCallback() {
+                override fun onMapDestroy() {
+                    Log.d("RESULT_MAP", "결과 지도 종료")
+                }
 
-        Log.d("MAP_RESULT", "받은 이미지 경로: $imagePath")
+                override fun onMapError(error: Exception) {
+                    Log.e("RESULT_MAP", "결과 지도 에러: ${error.message}",
+                        error
+                    )
+                }
+            },
+            object : KakaoMapReadyCallback() {
+                override fun onMapReady(kakaoMap: KakaoMap) {
+                    Log.d("RESULT_MAP", "결과 지도 준비 완료")
+                    this@RunningResultActivity.kakaoMap = kakaoMap
+                    drawRunningPath(kakaoMap)
+                }
 
-        val bitmap = BitmapFactory.decodeFile(imagePath)
+                override fun getPosition(): LatLng {
+                    // 경로가 있으면 첫 번째 위치
+                    if (runningPath.isNotEmpty()) {
+                        return runningPath.first()
+                    }
 
-        if (bitmap != null) {
-            Log.d("MAP_RESULT", "Bitmap Width = ${bitmap.width}, Height = ${bitmap.height}")
-
-            resultMapImage.setImageBitmap(bitmap)
-
-            Log.d("MAP_RESULT", "지도 이미지 표시 완료")
-        } else {
-            Log.e("MAP_RESULT", "Bitmap 생성 실패")
-        }
+                    // 경로가 없으면 서울 시청
+                    return LatLng.from(
+                        37.5665,
+                        126.9780
+                    )
+                }
+                override fun getZoomLevel(): Int {
+                    return 15
+                }
+            }
+        )
     }
 
     // =========================
@@ -147,12 +190,92 @@ class RunningResultActivity : AppCompatActivity() {
         // 러닝 지도 이미지 표시
         val imagePath = intent.getStringExtra("MAP_IMAGE_PATH")
         Log.d("MAP_RESULT", "받은 이미지 경로 = $imagePath")
+    }
 
-        if (imagePath != null) {
-            val bitmap = BitmapFactory.decodeFile(imagePath)
-            Log.d("MAP_RESULT", "Bitmap = $bitmap")
+    // =========================
+    // 러닝 경로 받기
+    // =========================
+    private fun getRunningPath() {
+        val latitudes = intent.getDoubleArrayExtra("RUNNING_LATITUDES")
+        val longitudes = intent.getDoubleArrayExtra("RUNNING_LONGITUDES")
 
-            resultMapImage.setImageBitmap(bitmap)
+        if (latitudes == null || longitudes == null) {
+            Log.e("RESULT_PATH", "러닝 경로 데이터가 없습니다.")
+            return
+        }
+        if (latitudes.size != longitudes.size) {
+            Log.e("RESULT_PATH", "위도와 경도의 개수가 일치하지 않습니다.")
+            return
+        }
+        runningPath.clear()
+
+        for (i in latitudes.indices) {
+            runningPath.add(
+                LatLng.from(
+                    latitudes[i], longitudes[i]
+                )
+            )
+        }
+        Log.d("RESULT_PATH", "러닝 경로 ${runningPath.size}개 좌표 받음")
+    }
+
+    // =========================
+    // 러닝 경로 Polyline 그리기
+    // =========================
+    private fun drawRunningPath(kakaoMap: KakaoMap) {
+        if (runningPath.size < 2) {
+            Log.d("RESULT_PATH", "경로 좌표가 2개 미만입니다.")
+            return
+        }
+        val shapeManager = kakaoMap.shapeManager
+
+        val layer = shapeManager?.getLayer()
+
+        if (layer == null) {
+            Log.e("RESULT_PATH", "ShapeLayer를 가져올 수 없습니다.")
+            return
+        }
+
+        // 기존 Polyline 제거
+        runningPolyline?.remove()
+
+        // LatLng → MapPoints
+        val mapPoints = MapPoints.fromLatLng(runningPath)
+
+        // Polyline 설정
+        val options = PolylineOptions.from(
+            mapPoints,
+            10f,
+            Color.BLUE
+        )
+
+        // 지도에 Polyline 추가
+        runningPolyline = layer.addPolyline(options)
+        Log.d("RESULT_PATH", "결과 화면 Polyline 그리기 완료")
+
+
+        // 첫 번째 위치로 카메라 이동
+        val firstPosition = runningPath.first()
+
+        kakaoMap.moveCamera(CameraUpdateFactory.newCenterPosition(firstPosition)
+        )
+    }
+
+    // =========================
+    // Activity 생명주기
+    // =========================
+    override fun onResume() {
+        super.onResume()
+        if (::resultMap.isInitialized) {
+            resultMap.resume()
         }
     }
+
+    override fun onPause() {
+        if (::resultMap.isInitialized) {
+            resultMap.pause()
+        }
+        super.onPause()
+    }
 }
+

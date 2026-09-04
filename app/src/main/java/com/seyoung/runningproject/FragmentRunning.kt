@@ -48,11 +48,13 @@ import java.security.MessageDigest
 class FragmentRunning : Fragment(R.layout.fragment_running) {
 
     private lateinit var mapView: MapView
+    private var kakaoMap: KakaoMap? = null
 
     // GPS를 다루기 위한 변수
     private lateinit var fusedLocationClient : FusedLocationProviderClient      // GPS 담당 (위치 정보를 가져오는 객체)
     private lateinit var locationRequest : LocationRequest                      // GPS에게 요구사항 전달 (GPS를 어떻게 받을것인지에 대한 설정값)
     private lateinit var locationCallback : LocationCallback                    // GPS가 보내준 결과를 받는 사람
+    private var isLocationUpdating = false                                      // GPS 중복 실행 방지
 
     private var currentLocationLabel: Label? = null     // 현재 위치 점으로 표시
     private var previousLocation: Location? =null       // 이전 위치 저장
@@ -306,27 +308,34 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                 btnRunning.text = "러닝 시작"
 
                 Log.d("RUNNING", "러닝 종료! 최종 거리: ${totalDistance}m")
+                Log.d("RUNNING_PATH", "종료 시 좌표 개수: ${runningPath.size}")
 
-                // 지도 이미지 저장
-                saveMapImage(btnRunning) { imagePath ->
-                    // 결과 화면 이동
-                    val intent = Intent(requireContext(), RunningResultActivity::class.java)
+                Log.d("RUNNING_PATH", "첫 좌표: ${runningPath.firstOrNull()}")
+                Log.d("RUNNING_PATH", "마지막 좌표: ${runningPath.lastOrNull()}")
 
-                    // 결과 값 RunningResultActivity로 전달
-                    intent.putExtra("TOTAL_DISTANCE", totalDistance)
-                    Log.d("TOTAL_DISTANCE", totalDistance.toString())
+                // 결과 화면 이동
+                val intent = Intent(requireContext(), RunningResultActivity::class.java)
 
-                    intent.putExtra("ELAPSED_TIME", elapsedTime)
-                    Log.d("ELAPSED_TIME", "${elapsedTime / 1000}초")
+                // 결과 값 RunningResultActivity로 전달
+                intent.putExtra("TOTAL_DISTANCE", totalDistance)
+                Log.d("TOTAL_DISTANCE", totalDistance.toString())
 
-                    intent.putExtra("ELEVATION_GAIN", totalElevationGain)
-                    Log.d("ELEVATION_GAIN", totalElevationGain.toString())
+                intent.putExtra("ELAPSED_TIME", elapsedTime)
+                Log.d("ELAPSED_TIME", "${elapsedTime / 1000}초")
 
-                    // 지도 이미지 경로
-                    intent.putExtra("MAP_IMAGE_PATH", imagePath)
+                intent.putExtra("ELEVATION_GAIN", totalElevationGain)
+                Log.d("ELEVATION_GAIN", totalElevationGain.toString())
 
-                    runningResultLauncher.launch(intent)
-                }
+                val latitudes = runningPath.map { it.latitude }.toDoubleArray()
+
+                val longitudes = runningPath.map { it.longitude }.toDoubleArray()
+
+                intent.putExtra("RUNNING_LATITUDES", latitudes)
+
+                intent.putExtra("RUNNING_LONGITUDES", longitudes)
+
+                runningResultLauncher.launch(intent)
+
             }
         }
     }
@@ -419,6 +428,11 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // GPS 위치 업데이트
     // =========================
     private fun startLocationUpdates(kakaoMap: KakaoMap) {
+        // 이미 GPS 업데이트 중이면 중복 실행하지 않음
+        if (isLocationUpdating) {
+            return
+        }
+
         if (ActivityCompat.checkSelfPermission(
                 requireContext(),
                 Manifest.permission.ACCESS_FINE_LOCATION
@@ -432,6 +446,9 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
             )
             return
         }
+
+        // GPS 업데이트 시작 상태
+        isLocationUpdating = true
 
         // 실시간 위치 업데이트 받기
         locationCallback =
@@ -549,9 +566,8 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
             object : KakaoMapReadyCallback() {
                 override fun onMapReady(kakaoMap: KakaoMap) {
                     Log.d("KakaoMap", "지도 준비 완료")
-                    startLocationUpdates(
-                        kakaoMap
-                    )
+                    this@FragmentRunning.kakaoMap = kakaoMap
+                    startLocationUpdates(kakaoMap)
                 }
 
                 override fun getPosition(): LatLng {
@@ -570,8 +586,14 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // =========================
     override fun onResume() {
         super.onResume()
+
         if (::mapView.isInitialized) {
             mapView.resume()
+        }
+
+        // 다시 화면으로 돌아오면 GPS 재시작
+        kakaoMap?.let {
+            startLocationUpdates(it)
         }
     }
 
@@ -579,10 +601,13 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // Fragment 화면 비활성화
     // =========================
     override fun onPause() {
-        if (::locationCallback.isInitialized) {
+        // 러닝 중이 아닐 때만 GPS 종료
+        if (!isRunning && ::locationCallback.isInitialized) {
             fusedLocationClient.removeLocationUpdates(locationCallback)
+            isLocationUpdating = false
         }
 
+        // 지도는 일단 pause
         if (::mapView.isInitialized) {
             mapView.pause()
         }
