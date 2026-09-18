@@ -1,9 +1,7 @@
 package com.seyoung.runningproject
 
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.Log
-import android.widget.ImageView
 import android.widget.TextView
 
 import androidx.appcompat.app.AppCompatActivity
@@ -79,7 +77,11 @@ class RunningResultActivity : AppCompatActivity() {
                 override fun onMapReady(kakaoMap: KakaoMap) {
                     Log.d("RESULT_MAP", "결과 지도 준비 완료")
                     this@RunningResultActivity.kakaoMap = kakaoMap
+                    // 러닝 경로 그리기
                     drawRunningPath(kakaoMap)
+
+                    // 러닝 경로에 맞춰 지도 자동 확대/축소
+                    fitRunningPath(kakaoMap)
                 }
 
                 override fun getPosition(): LatLng {
@@ -95,6 +97,8 @@ class RunningResultActivity : AppCompatActivity() {
                     )
                 }
                 override fun getZoomLevel(): Int {
+                    // 초기값
+                    // 실제 경로에 맞는 줌은 onMapReady()에서 fitRunningPath()가 결정
                     return 15
                 }
             }
@@ -188,8 +192,8 @@ class RunningResultActivity : AppCompatActivity() {
         elevationGainTv.text = String.format("%.0f m", elevationGain)
 
         // 러닝 지도 이미지 표시
-        val imagePath = intent.getStringExtra("MAP_IMAGE_PATH")
-        Log.d("MAP_RESULT", "받은 이미지 경로 = $imagePath")
+//        val imagePath = intent.getStringExtra("MAP_IMAGE_PATH")
+//        Log.d("MAP_RESULT", "받은 이미지 경로 = $imagePath")
     }
 
     // =========================
@@ -255,10 +259,39 @@ class RunningResultActivity : AppCompatActivity() {
 
 
         // 첫 번째 위치로 카메라 이동
-        val firstPosition = runningPath.first()
+//        val firstPosition = runningPath.first()
+//
+//        kakaoMap.moveCamera(CameraUpdateFactory.newCenterPosition(firstPosition)
+//        )
+    }
 
-        kakaoMap.moveCamera(CameraUpdateFactory.newCenterPosition(firstPosition)
-        )
+    private fun fitRunningPath(kakaoMap: KakaoMap) {
+        if (runningPath.size < 2) {
+            Log.d("RESULT_MAP", "경로가 2개 미만이라 자동 맞춤을 하지 않습니다.")
+            return
+        }
+
+        // MutableList -> Array
+        val points = runningPath.toTypedArray()
+
+        /*
+        * padding
+        * 지도 가장자리와 러닝 경로 사이의 여백
+        * 값이 클수록 경로가 지도 중앙 쪽으로 들어옴
+        * 40px 정도면 현재 결과 화면에 적당한 여백
+        */
+        val padding = 40
+
+        /*
+         * KakaoMap SDK가
+         * "이 좌표들을 모두 화면에 보여주려면
+         * 카메라를 어떻게 잡아야 하는지"
+         * 자동으로 계산
+         */
+        val cameraUpdate = CameraUpdateFactory.fitMapPoints(points, padding)
+        kakaoMap.moveCamera(cameraUpdate)
+        Log.d("RESULT_MAP", "러닝 경로에 맞춰 지도 자동 맞춤 완료 / " + "좌표개수 : ${runningPath.size} / " + "padding : ${padding}px")
+
     }
 
     // =========================
