@@ -68,10 +68,19 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     private var runningPolyline: Polyline? = null       // 지도에 표시되는 러닝 경로 선
 
     // 러닝 타이머
-    private var startTime = 0L      // 러닝을 시작한 시각
-    private var elapsedTime = 0L    // 러닝 경과 시간
+    // 실제 움직인 시간 누적
+    private var elapsedTime = 0L
 
+    // 마지막 GPS 위치가 들어온 시간
+    private var lastLocationTime = 0L
+
+    // 현재 사용자가 움직이고 있는지
+    private var isMoving = false
+
+    // 1초마다 화면/로그 확인
     private var timerHandler = Handler(Looper.getMainLooper())
+
+    // 1초마다 실행할 코드
     private lateinit var timerRunnable: Runnable
 
 
@@ -273,6 +282,11 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                 // 거리 초기화
                 totalDistance = 0.0
 
+                // 시간 초기화
+                elapsedTime = 0L
+                lastLocationTime = 0L
+                isMoving = false
+
                 // 이전 GPS 위치 초기화
                 previousLocation = null
 
@@ -344,15 +358,11 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // 타이머 시작 함수
     // =========================
     private fun startTimer() {
-        // 러닝 시작 시간 저장
-        startTime = System.currentTimeMillis()
-        timerRunnable = object : Runnable {
+        timerRunnable = object  : Runnable {
             override fun run() {
-                // 현재 시간 - 시작 시간
-                elapsedTime = System.currentTimeMillis() - startTime
-
-                // 밀리초 -> 초
+                // 현재까지 누적된 실제 이동 시간 표시
                 val totalSeconds = elapsedTime / 1000
+
                 val hours = totalSeconds / 3600
                 val minutes = (totalSeconds % 3600) / 60
                 val seconds = totalSeconds % 60
@@ -424,9 +434,9 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         return bitmap
     }
 
-    // =========================
-    // GPS 위치 업데이트
-    // =========================
+    // =====================================
+    // GPS 위치 업데이트 (실제 시간 계산하여 증가)
+    // =====================================
     private fun startLocationUpdates(kakaoMap: KakaoMap) {
         // 이미 GPS 업데이트 중이면 중복 실행하지 않음
         if (isLocationUpdating) {
@@ -467,12 +477,40 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                         // GPS 좌표 만들기
                         val currentPosition = LatLng.from(latitude, longitude)
 
-                        // =====================
-                        // 러닝 중 GPS 경로 저장
-                        // =====================
+                        // =================================
+                        // 러닝 중 GPS 경로 저장 + 이동 시간 계산
+                        // =================================
                         if (isRunning) {
+                            // 현재 GPS가 들어온 시간
+                            val currentLocationTime = location.elapsedRealtimeNanos / 1_000_000L
+
+                            // 이전 GPS 위치가 있는 경우
+                            if (previousLocation != null) {
+                                // 이전 GPS -> 현재 GPS 거리
+                                val distance = previousLocation !!.distanceTo(location)
+
+                                // 1m 이상 이동했으면 움직이는 중
+                                isMoving = distance >= 1.0f
+
+                                // 이전 GPS 시간도 존재한다면
+                                if (lastLocationTime != 0L) {
+                                    // 이전 GPS -> 현재 GPS 사이의 시간 (현재시간 - 이전시간)
+                                    val deltaTime = currentLocationTime - lastLocationTime
+
+                                    // 움직이고 있을 때만 시간 누적
+                                    if (isMoving && deltaTime > 0L) {
+                                        elapsedTime += deltaTime
+                                        Log.d("RUN_TIMER", "이동 시간 추가 : ${deltaTime}ms / " + "총 이동 시간 : ${elapsedTime}ms")
+                                    }
+                                }
+                            }
+                            // 현재 GPS 시간을 다음 GPS의 이전 시간으로 저장
+                            lastLocationTime = currentLocationTime
+
+                            // GPS 경로 저장
                             runningPath.add(currentPosition)
-                            Log.d("RUNNING_PATH", "경로 저장: ${currentPosition.latitude}, ${currentPosition.longitude}")
+                            Log.d("RUNNING_PATH", "경로 저장 : ${currentPosition.latitude}, " + "${currentPosition.longitude}")
+
                             // 현재까지 저장된 GPS 경로를 지도에 선으로 표시
                             drawRunningPath(kakaoMap)
                         }
