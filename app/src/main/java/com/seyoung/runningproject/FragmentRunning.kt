@@ -18,8 +18,12 @@ import android.util.Log
 import android.view.PixelCopy
 import android.view.View
 import android.widget.Button
+import android.widget.TextView
+import android.widget.Toast
+import com.google.android.material.bottomsheet.BottomSheetBehavior
 import androidx.core.app.ActivityCompat
 import androidx.fragment.app.Fragment
+import androidx.core.view.doOnLayout
 
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -83,6 +87,26 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // 1초마다 실행할 코드
     private lateinit var timerRunnable: Runnable
 
+    // Bottom Sheet 및 화면 요소
+    private lateinit var bottomSheet: View
+    private lateinit var bottomSheetBehavior: BottomSheetBehavior<View>
+    private lateinit var modeSelector: View
+    private lateinit var recommendedRouteContainer: View
+    private lateinit var freeRunningContainer: View
+    private lateinit var startRunningButton: Button
+    private lateinit var runningActiveContainer: View
+    private lateinit var pauseRunningButton: Button
+    private lateinit var stopRunningButton: Button
+    private lateinit var runningDistanceText: TextView
+    private lateinit var runningTimeText: TextView
+    private lateinit var runningPaceText: TextView
+
+    // 추천 경로 / 자유 러닝 선택 상태
+    private var isRecommendedMode = true
+    private var targetDistanceKm: Double? = null
+    private var isPaused = false
+    private var hasShownTargetDistanceNotice = false
+
 
     private val runningResultLauncher =
         registerForActivityResult(
@@ -91,11 +115,10 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
 
             if (it.resultCode == android.app.Activity.RESULT_OK) {
 
-                // 러닝 상태 초기화
+                // 결과 화면에서 돌아오면 러닝 UI 초기화
                 isRunning = false
-
-                // 버튼 다시 시작 상태로 변경
-                view?.findViewById<Button>(R.id.btn_running)?.text = "러닝 시작"
+                isPaused = false
+                view?.let { resetPreRunUi(it) }
 
                 Log.d("RUNNING", "결과 화면에서 돌아옴 → 러닝 초기화")
             }
@@ -143,8 +166,8 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         // 앱 해시 키 확인
         getAppKeyHash()
 
-        // 러닝 시작 / 종료 버튼
-        setupRunningButtons(view)
+        // Bottom Sheet 초기화 및 버튼 이벤트 연결
+        setupBottomSheet(view)
     }
 
     // =========================
@@ -266,92 +289,235 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     }
 
     // =========================
-    // 러닝 시작 / 종료 버튼
+    // Bottom Sheet 초기화
     // =========================
-    private fun setupRunningButtons(view: View) {
-        val btnRunning = view.findViewById<Button>(R.id.btn_running)
-        btnRunning.setOnClickListener {
+    private fun setupBottomSheet(view: View) {
+        bottomSheet = view.findViewById(R.id.running_bottom_sheet)
 
-            // =========================
-            // 러닝 시작
-            // =========================
-            if (!isRunning) {
+        bottomSheetBehavior = BottomSheetBehavior.from(bottomSheet).apply {
+            isFitToContents = true
+            isHideable = false
+            peekHeight = dpToPx(130)    // BottomSheet를 접었을 때 노출 높이
+        }
 
-                isRunning = true
+        // 실제 레이아웃 측정이 끝난 후 상태 설정
+        bottomSheet.doOnLayout { sheet ->
+            Log.d("BOTTOM_SHEET", "초기화 확인: " + "height=${sheet.height}, " + "measuredHeight=${sheet.measuredHeight}, " + "visibility=${sheet.visibility}")
 
-                // 거리 초기화
-                totalDistance = 0.0
-
-                // 시간 초기화
-                elapsedTime = 0L
-                lastLocationTime = 0L
-                isMoving = false
-
-                // 이전 GPS 위치 초기화
-                previousLocation = null
-
-                // GPS 경로 초기화
-                runningPath.clear()
-
-                // 기존 지도 경로 제거
-                runningPolyline?.remove()
-                runningPolyline = null
-
-                // 고도 상승 초기화
-                totalElevationGain = 0.0
-                previousAltitude = null
-
-                // 타이머 시작
-                startTimer()
-
-                // 버튼 텍스트 변경
-                btnRunning.text = "러닝 종료"
-
-                Log.d("RUNNING", "러닝 시작!")
-            }
-
-            // =========================
-            // 러닝 종료
-            // =========================
-            else {
-                isRunning = false
-                // 타이머 종료
-                stopTimer()
-
-                // 결과페이지 갔다가 왔을 때 버튼 상태 값 변경
-                btnRunning.text = "러닝 시작"
-
-                Log.d("RUNNING", "러닝 종료! 최종 거리: ${totalDistance}m")
-                Log.d("RUNNING_PATH", "종료 시 좌표 개수: ${runningPath.size}")
-
-                Log.d("RUNNING_PATH", "첫 좌표: ${runningPath.firstOrNull()}")
-                Log.d("RUNNING_PATH", "마지막 좌표: ${runningPath.lastOrNull()}")
-
-                // 결과 화면 이동
-                val intent = Intent(requireContext(), RunningResultActivity::class.java)
-
-                // 결과 값 RunningResultActivity로 전달
-                intent.putExtra("TOTAL_DISTANCE", totalDistance)
-                Log.d("TOTAL_DISTANCE", totalDistance.toString())
-
-                intent.putExtra("ELAPSED_TIME", elapsedTime)
-                Log.d("ELAPSED_TIME", "${elapsedTime / 1000}초")
-
-                intent.putExtra("ELEVATION_GAIN", totalElevationGain)
-                Log.d("ELEVATION_GAIN", totalElevationGain.toString())
-
-                val latitudes = runningPath.map { it.latitude }.toDoubleArray()
-
-                val longitudes = runningPath.map { it.longitude }.toDoubleArray()
-
-                intent.putExtra("RUNNING_LATITUDES", latitudes)
-
-                intent.putExtra("RUNNING_LONGITUDES", longitudes)
-
-                runningResultLauncher.launch(intent)
-
+            if (sheet.height > 0) {
+                bottomSheetBehavior.state =
+                    BottomSheetBehavior.STATE_COLLAPSED
+            } else {
+                Log.e("BOTTOM_SHEET", "레이아웃 높이가 여전히 0입니다.")
             }
         }
+
+        modeSelector = view.findViewById(R.id.running_mode_selector)
+        recommendedRouteContainer = view.findViewById(R.id.recommended_route_container)
+        freeRunningContainer = view.findViewById(R.id.free_running_container)
+        startRunningButton = view.findViewById(R.id.btn_start_running)
+        runningActiveContainer = view.findViewById(R.id.running_active_container)
+        pauseRunningButton = view.findViewById(R.id.btn_pause_running)
+        stopRunningButton = view.findViewById(R.id.btn_stop_running)
+        runningDistanceText = view.findViewById(R.id.tv_running_distance)
+        runningTimeText = view.findViewById(R.id.tv_running_time)
+        runningPaceText = view.findViewById(R.id.tv_running_pace)
+
+        view.findViewById<TextView>(R.id.btn_mode_recommended).setOnClickListener {
+            if (!isRunning) {
+                isRecommendedMode = true
+                updatePreRunMode(view)
+                bottomSheetBehavior.state = BottomSheetBehavior.STATE_EXPANDED
+            }
+        }
+
+        view.findViewById<TextView>(R.id.btn_mode_free).setOnClickListener {
+            if (!isRunning) {
+                isRecommendedMode = false
+                updatePreRunMode(view)
+                bottomSheetBehavior.state = BottomSheetBehavior.STATE_EXPANDED
+            }
+        }
+
+        view.findViewById<Button>(R.id.btn_target_none).setOnClickListener {
+            setTargetDistance(null, view)
+        }
+        view.findViewById<Button>(R.id.btn_target_3km).setOnClickListener {
+            setTargetDistance(3.0, view)
+        }
+        view.findViewById<Button>(R.id.btn_target_5km).setOnClickListener {
+            setTargetDistance(5.0, view)
+        }
+        view.findViewById<Button>(R.id.btn_target_10km).setOnClickListener {
+            setTargetDistance(10.0, view)
+        }
+
+        view.findViewById<Button>(R.id.btn_other_route).setOnClickListener {
+            Toast.makeText(
+                requireContext(),
+                "추천 경로 기능은 다음 단계에서 연결할게요.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
+        startRunningButton.setOnClickListener {
+            startRunning(view)
+        }
+
+        pauseRunningButton.setOnClickListener {
+            if (isRunning) {
+                isPaused = !isPaused
+                previousLocation = null
+                lastLocationTime = 0L
+                isMoving = false
+                pauseRunningButton.text = if (isPaused) "러닝 재개" else "일시정지"
+                view.findViewById<TextView>(R.id.tv_running_active_title).text =
+                    if (isPaused) "일시정지 중" else "러닝 중"
+                updateRunningStats()
+                Toast.makeText(
+                    requireContext(),
+                    if (isPaused) "러닝을 일시정지했어요." else "러닝을 재개했어요.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
+        stopRunningButton.setOnClickListener {
+            if (isRunning) finishRunning()
+        }
+
+        updatePreRunMode(view)
+        setTargetDistance(null, view)
+        updateRunningStats()
+    }
+
+    private fun updatePreRunMode(view: View) {
+        recommendedRouteContainer.visibility =
+            if (isRecommendedMode) View.VISIBLE else View.GONE
+        freeRunningContainer.visibility =
+            if (isRecommendedMode) View.GONE else View.VISIBLE
+
+        val recommendedButton = view.findViewById<TextView>(R.id.btn_mode_recommended)
+        val freeButton = view.findViewById<TextView>(R.id.btn_mode_free)
+
+        recommendedButton.setBackgroundColor(
+            if (isRecommendedMode) Color.WHITE else Color.TRANSPARENT
+        )
+        freeButton.setBackgroundColor(
+            if (!isRecommendedMode) Color.WHITE else Color.TRANSPARENT
+        )
+        recommendedButton.alpha = if (isRecommendedMode) 1f else 0.7f
+        freeButton.alpha = if (!isRecommendedMode) 1f else 0.7f
+
+        view.findViewById<TextView>(R.id.tv_running_title).text =
+            if (isRecommendedMode) "오늘 어떻게 뛸까요?" else "내 맘대로 러닝"
+        startRunningButton.text =
+            if (isRecommendedMode) "이 경로로 러닝 시작" else "러닝 시작"
+    }
+
+    private fun setTargetDistance(distanceKm: Double?, view: View) {
+        targetDistanceKm = distanceKm
+        val options = listOf(
+            R.id.btn_target_none to (distanceKm == null),
+            R.id.btn_target_3km to (distanceKm == 3.0),
+            R.id.btn_target_5km to (distanceKm == 5.0),
+            R.id.btn_target_10km to (distanceKm == 10.0)
+        )
+        options.forEach { (id, selected) ->
+            view.findViewById<Button>(id).alpha = if (selected) 1f else 0.65f
+        }
+    }
+
+    private fun startRunning(view: View) {
+        if (isRunning) return
+
+        isRunning = true
+        isPaused = false
+        totalDistance = 0.0
+        hasShownTargetDistanceNotice = false
+        elapsedTime = 0L
+        lastLocationTime = 0L
+        isMoving = false
+        previousLocation = null
+        runningPath.clear()
+        runningPolyline?.remove()
+        runningPolyline = null
+        totalElevationGain = 0.0
+        previousAltitude = null
+
+        modeSelector.visibility = View.GONE
+        view.findViewById<TextView>(R.id.tv_running_title).visibility = View.GONE
+        recommendedRouteContainer.visibility = View.GONE
+        freeRunningContainer.visibility = View.GONE
+        startRunningButton.visibility = View.GONE
+        runningActiveContainer.visibility = View.VISIBLE
+        pauseRunningButton.text = "일시정지"
+        view.findViewById<TextView>(R.id.tv_running_active_title).text = "러닝 중"
+
+        bottomSheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
+        updateRunningStats()
+        startTimer()
+
+        Log.d("RUNNING", "러닝 시작 / 모드: ${if (isRecommendedMode) "추천 경로" else "내 맘대로"} / 목표: ${targetDistanceKm ?: "제한 없음"}")
+    }
+
+    private fun finishRunning() {
+        isRunning = false
+        isPaused = false
+        stopTimer()
+
+        Log.d("RUNNING", "러닝 종료! 최종 거리: ${totalDistance}m")
+        Log.d("RUNNING_PATH", "종료 시 좌표 개수: ${runningPath.size}")
+
+        val intent = Intent(requireContext(), RunningResultActivity::class.java)
+        intent.putExtra("TOTAL_DISTANCE", totalDistance)
+        intent.putExtra("ELAPSED_TIME", elapsedTime)
+        intent.putExtra("ELEVATION_GAIN", totalElevationGain)
+
+        val latitudes = runningPath.map { it.latitude }.toDoubleArray()
+        val longitudes = runningPath.map { it.longitude }.toDoubleArray()
+        intent.putExtra("RUNNING_LATITUDES", latitudes)
+        intent.putExtra("RUNNING_LONGITUDES", longitudes)
+
+        runningResultLauncher.launch(intent)
+    }
+
+    private fun resetPreRunUi(view: View) {
+        modeSelector.visibility = View.VISIBLE
+        view.findViewById<TextView>(R.id.tv_running_title).visibility = View.VISIBLE
+        startRunningButton.visibility = View.VISIBLE
+        runningActiveContainer.visibility = View.GONE
+        pauseRunningButton.text = "일시정지"
+        updatePreRunMode(view)
+        bottomSheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
+    }
+
+    private fun updateRunningStats() {
+        if (!::runningDistanceText.isInitialized) return
+
+        val distanceKm = totalDistance / 1000.0
+        runningDistanceText.text = String.format("%.2f km", distanceKm)
+
+        val totalSeconds = elapsedTime / 1000
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        runningTimeText.text = if (hours > 0) {
+            String.format("%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format("%02d:%02d", minutes, seconds)
+        }
+
+        runningPaceText.text = if (distanceKm > 0.0 && totalSeconds > 0) {
+            val paceSeconds = (totalSeconds / distanceKm).toInt()
+            String.format("%d'%02d\"/km", paceSeconds / 60, paceSeconds % 60)
+        } else {
+            "--'--\"/km"
+        }
+    }
+
+    private fun dpToPx(dp: Int): Int {
+        return (dp * resources.displayMetrics.density).toInt()
     }
 
     // =========================
@@ -367,6 +533,7 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                 val minutes = (totalSeconds % 3600) / 60
                 val seconds = totalSeconds % 60
                 Log.d("RUN_TIMER", String.format("%02d:%02d:%02d", hours, minutes, seconds))
+                updateRunningStats()
 
                 // 1초 후 다시 실행
                 timerHandler.postDelayed(this, 1000)
@@ -480,7 +647,7 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                         // =================================
                         // 러닝 중 GPS 경로 저장 + 이동 시간 계산
                         // =================================
-                        if (isRunning) {
+                        if (isRunning && !isPaused) {
                             // 현재 GPS가 들어온 시간
                             val currentLocationTime = location.elapsedRealtimeNanos / 1_000_000L
 
@@ -538,7 +705,7 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                         // =====================
                         // 러닝 중일 경우 거리 계산
                         // =====================
-                        if (isRunning) {
+                        if (isRunning && !isPaused) {
                             previousLocation?.let { previous ->
                                 // 이전 위치 → 현재 위치 거리
                                 val distance = previous.distanceTo(location)
@@ -548,6 +715,21 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                                     // 총 이동 거리 누적
                                     totalDistance += distance
                                     Log.d("RUN_DISTANCE", "이동 거리 추가: ${distance}m / " + "총 거리 : ${totalDistance}m")
+
+                                    val targetMeters = if (!isRecommendedMode) targetDistanceKm?.times(1000.0) else null
+                                    if (
+                                        !hasShownTargetDistanceNotice &&
+                                        targetMeters != null &&
+                                        totalDistance >= targetMeters
+                                    ) {
+                                        hasShownTargetDistanceNotice = true
+                                        Toast.makeText(
+                                            requireContext(),
+                                            "목표 거리 달성! 원하는 만큼 더 달려도 좋아요.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                    updateRunningStats()
                                 } else {
                                     Log.d("RUN_DISTANCE", "GPS 오차 무시: ${distance}m / " + "총 거리 : ${totalDistance}m")
                                 }
@@ -556,7 +738,7 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                         // =====================
                         // 고도 상승 계산
                         // =====================
-                        if (isRunning) {
+                        if (isRunning && !isPaused) {
                             val currentAltitude = location.altitude
                             previousAltitude?.let { previous ->
                                 val altitudeDifference = currentAltitude - previous

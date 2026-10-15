@@ -3,6 +3,8 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
+
+    id("org.jetbrains.kotlin.kapt")
 }
 
 val properties = Properties()
@@ -71,4 +73,8 @@ dependencies {
 
     implementation("com.kakao.maps.open:android:2.9.5")     // 카카오맵api 사용
     implementation("com.google.android.gms:play-services-location:21.3.0")      // gps 사용
+
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    kapt(libs.androidx.room.compiler)
 }
