@@ -5,7 +5,6 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginBottom="15dp"
-    android:background="@color/white"
     >
 
     <com.google.android.material.card.MaterialCardView
@@ -13,10 +12,10 @@
         android:layout_width="match_parent"
         android:layout_height="150dp"
         app:cardBackgroundColor="@android:color/white"
-        app:cardCornerRadius="12dp"
+        app:cardCornerRadius="16dp"
         app:cardElevation="2dp"
         app:strokeWidth="1dp"
-        app:strokeColor="#DDDDDD"
+        app:strokeColor="#E5EAF0"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
@@ -25,46 +24,190 @@
         <androidx.constraintlayout.widget.ConstraintLayout
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:padding="12dp"
             >
 
-            <TextView
-                android:id="@+id/recently_date_tv"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="20dp"
-                android:layout_marginTop="10dp"
-                android:text="9월 29일"
-                android:textColor="#000000"
-                android:textSize="20sp"
+            <!-- 왼쪽 지도 미리보기 영역 -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/recently_map_card"
+                android:layout_width="100dp"
+                android:layout_height="124dp"
+                app:cardBackgroundColor="#EDF7F2"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                app:strokeWidth="0dp"
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintTop_toTopOf="parent"
-                />
+                app:layout_constraintBottom_toBottomOf="parent"
+                >
 
-            <TextView
-                android:id="@+id/recently_total"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="20dp"
-                android:layout_marginTop="4dp"
-                android:text="5.21km"
-                android:textColor="#000000"
-                android:textSize="20sp"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/recently_date_tv"
-                />
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    >
 
-            <TextView
-                android:id="@+id/recently_time"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="20dp"
-                android:layout_marginTop="4dp"
-                android:text="32:15 · 6'11&quot;/km"
-                android:textColor="#000000"
-                android:textSize="20sp"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/recently_total"
-                />
+                    <ImageView
+                        android:id="@+id/recently_map_iv"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:scaleType="centerCrop"
+                        android:contentDescription="러닝 경로 미리보기"
+                        android:src="@drawable/ic_launcher_background"
+                        />
+
+                </FrameLayout>
+
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- 오른쪽 통계 영역 -->
+            <androidx.constraintlayout.widget.ConstraintLayout
+                android:id="@+id/recently_info_layout"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="14dp"
+                app:layout_constraintStart_toEndOf="@id/recently_map_card"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent"
+                >
+
+                <!-- 날짜 -->
+                <TextView
+                    android:id="@+id/recently_date_tv"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:text="9월 29일"
+                    android:textColor="#172033"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintEnd_toStartOf="@id/recently_detail_iv"
+                    app:layout_constraintTop_toTopOf="parent"
+                    />
+
+                <!-- 상세 이동 아이콘 -->
+                <ImageView
+                    android:id="@+id/recently_detail_iv"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/chevron_right"
+                    android:contentDescription="러닝 상세 보기"
+                    app:tint="#8B95A5"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintTop_toTopOf="parent"
+                    />
+
+                <!-- 통계 3개: 동일한 너비 -->
+                <LinearLayout
+                    android:id="@+id/recently_stats_layout"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:orientation="horizontal"
+                    android:weightSum="3"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintTop_toBottomOf="@id/recently_date_tv"
+                    >
+
+                    <!-- 거리 -->
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        >
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="거리"
+                            android:textColor="#778397"
+                            android:textSize="12sp"
+                            />
+
+                        <TextView
+                            android:id="@+id/distance_total"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="5.21km"
+                            android:textColor="#172033"
+                            android:textSize="15sp"
+                            android:textStyle="bold"
+                            android:maxLines="1"
+                            android:ellipsize="end"
+                            />
+
+                    </LinearLayout>
+
+                    <!-- 운동 시간 -->
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        >
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="운동 시간"
+                            android:textColor="#778397"
+                            android:textSize="12sp"
+                            />
+
+                        <TextView
+                            android:id="@+id/time_total"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="4분 43초"
+                            android:textColor="#172033"
+                            android:textSize="15sp"
+                            android:textStyle="bold"
+                            android:maxLines="1"
+                            android:ellipsize="end"
+                            />
+
+                    </LinearLayout>
+
+                    <!-- 평균 페이스 -->
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        >
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="평균 페이스"
+                            android:textColor="#778397"
+                            android:textSize="12sp"
+                            />
+
+                        <TextView
+                            android:id="@+id/pace_total"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="5'50&quot;/km"
+                            android:textColor="#172033"
+                            android:textSize="15sp"
+                            android:textStyle="bold"
+                            android:maxLines="1"
+                            android:ellipsize="end"
+                            />
+
+                    </LinearLayout>
+
+                </LinearLayout>
+
+            </androidx.constraintlayout.widget.ConstraintLayout>
 
         </androidx.constraintlayout.widget.ConstraintLayout>
 

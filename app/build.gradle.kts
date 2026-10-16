@@ -74,7 +74,10 @@ dependencies {
     implementation("com.kakao.maps.open:android:2.9.5")     // 카카오맵api 사용
     implementation("com.google.android.gms:play-services-location:21.3.0")      // gps 사용
 
+    // Room 의존성
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     kapt(libs.androidx.room.compiler)
+
+    implementation(libs.androidx.recyclerview)
 }

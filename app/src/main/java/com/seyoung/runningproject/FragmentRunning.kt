@@ -24,6 +24,12 @@ import com.google.android.material.bottomsheet.BottomSheetBehavior
 import androidx.core.app.ActivityCompat
 import androidx.fragment.app.Fragment
 import androidx.core.view.doOnLayout
+import androidx.lifecycle.lifecycleScope
+
+import kotlinx.coroutines.launch
+
+import com.seyoung.runningproject.data.RunningDatabase
+import com.seyoung.runningproject.data.RunningRecord
 
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -48,6 +54,8 @@ import java.io.File
 import java.io.FileOutputStream
 
 import java.security.MessageDigest
+
+import org.json.JSONArray
 
 class FragmentRunning : Fragment(R.layout.fragment_running) {
 
@@ -74,6 +82,9 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // 러닝 타이머
     // 실제 움직인 시간 누적
     private var elapsedTime = 0L
+
+    // 러닝 시작 시각
+    private var runningStartedAt = 0L
 
     // 마지막 GPS 위치가 들어온 시간
     private var lastLocationTime = 0L
@@ -107,21 +118,23 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     private var isPaused = false
     private var hasShownTargetDistanceNotice = false
 
-
     private val runningResultLauncher =
         registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
         ) {
+            // 결과 화면에서 돌아오면 항상 러닝 UI 초기화
+            isRunning = false
+            isPaused = false
+            previousLocation = null
+            lastLocationTime = 0L
+            isMoving = false
 
-            if (it.resultCode == android.app.Activity.RESULT_OK) {
-
-                // 결과 화면에서 돌아오면 러닝 UI 초기화
-                isRunning = false
-                isPaused = false
-                view?.let { resetPreRunUi(it) }
-
-                Log.d("RUNNING", "결과 화면에서 돌아옴 → 러닝 초기화")
+            view?.let { currentView ->
+                resetPreRunUi(currentView)
+                updateRunningStats()
             }
+
+            Log.d("RUNNING", "결과 화면에서 돌아옴 → 러닝 초기화")
         }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -432,6 +445,7 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         if (isRunning) return
 
         isRunning = true
+        runningStartedAt = System.currentTimeMillis()   // 러닝을 시작한 날짜와 시각 기록
         isPaused = false
         totalDistance = 0.0
         hasShownTargetDistanceNotice = false
@@ -454,7 +468,10 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         pauseRunningButton.text = "일시정지"
         view.findViewById<TextView>(R.id.tv_running_active_title).text = "러닝 중"
 
-        bottomSheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
+//        bottomSheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
+        // 러닝 중 접힌 상태의 높이
+        bottomSheetBehavior.peekHeight = dpToPx(110)
+        bottomSheetBehavior.state = BottomSheetBehavior.STATE_EXPANDED
         updateRunningStats()
         startTimer()
 
@@ -467,19 +484,82 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         stopTimer()
 
         Log.d("RUNNING", "러닝 종료! 최종 거리: ${totalDistance}m")
+
         Log.d("RUNNING_PATH", "종료 시 좌표 개수: ${runningPath.size}")
 
-        val intent = Intent(requireContext(), RunningResultActivity::class.java)
-        intent.putExtra("TOTAL_DISTANCE", totalDistance)
-        intent.putExtra("ELAPSED_TIME", elapsedTime)
-        intent.putExtra("ELEVATION_GAIN", totalElevationGain)
+        Log.d("RUNNING_PATH", "시작 좌표: ${runningPath.firstOrNull()}")
+
+        Log.d("RUNNING_PATH", "마지막 좌표: ${runningPath.lastOrNull()}")
+
+        // 결과 화면으로 전달할 데이터
+        val distance = totalDistance
+        val time = elapsedTime
+        val elevation = totalElevationGain
+        val startedAt = runningStartedAt
 
         val latitudes = runningPath.map { it.latitude }.toDoubleArray()
         val longitudes = runningPath.map { it.longitude }.toDoubleArray()
-        intent.putExtra("RUNNING_LATITUDES", latitudes)
-        intent.putExtra("RUNNING_LONGITUDES", longitudes)
 
-        runningResultLauncher.launch(intent)
+        val intent = Intent(
+            requireContext(),
+            RunningResultActivity::class.java
+        ).apply {
+            putExtra("TOTAL_DISTANCE", distance)
+            putExtra("ELAPSED_TIME", time)
+            putExtra("ELEVATION_GAIN", elevation)
+            putExtra("RUNNING_LATITUDES", latitudes)
+            putExtra("RUNNING_LONGITUDES", longitudes)
+        }
+
+        // Room 데이터베이스에 러닝 기록 저장
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                // GPS 경로를 JSON 문자열로 변환
+                val routeCoordinatesJson = JSONArray().apply {
+                    runningPath.forEach { point ->
+                        put(
+                            JSONArray().apply {
+                                put(point.latitude)
+                                put(point.longitude)
+                            }
+                        )
+                    }
+                }.toString()
+
+                Log.d("RUNNING_DB", "저장 직전 좌표 개수: ${runningPath.size}")
+
+                Log.d("RUNNING_DB", "저장할 경로 JSON: $routeCoordinatesJson")
+
+                // 러닝 요약 정보와 GPS 경로를 함께 저장
+                val record = RunningRecord(
+                    startedAt = startedAt,
+                    totalDistanceMeters = distance,
+                    elapsedTimeMillis = time,
+                    elevationGainMeters = elevation,
+                    routeCoordinatesJson = routeCoordinatesJson
+                )
+
+                val dao = RunningDatabase
+                    .getDatabase(requireContext())
+                    .runningRecordDao()
+
+                val recordId = dao.insert(record)
+
+                Log.d("RUNNING_DB",
+                    "러닝 기록 저장 완료: id=$recordId, " +
+                            "좌표 개수=${runningPath.size}, " +
+                            "JSON 길이=${routeCoordinatesJson.length}"
+                )
+
+                // 저장이 끝나면 기존 결과 화면으로 이동
+                runningResultLauncher.launch(intent)
+
+            } catch (e: Exception) {
+                Log.e("RUNNING_DB", "러닝 기록 저장 실패", e)
+
+                Toast.makeText(requireContext(), "러닝 기록 저장에 실패했어요.", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun resetPreRunUi(view: View) {
@@ -489,6 +569,11 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         runningActiveContainer.visibility = View.GONE
         pauseRunningButton.text = "일시정지"
         updatePreRunMode(view)
+
+        // 러닝 전 접힌 높이로 복구
+        bottomSheetBehavior.peekHeight = dpToPx(130)
+
+        // BottomSheet 접기
         bottomSheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
     }
 
