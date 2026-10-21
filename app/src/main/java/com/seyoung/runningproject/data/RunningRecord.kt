@@ -8,7 +8,8 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "running_records")
 data class RunningRecord(
     @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,       // 러닝 기록의 고유 번호
+    // 러닝 기록의 고유 번호
+    val id: Long = 0,
 
     // 러닝 시작한 날짜와 시각 (Unix timestamp, milliseconds)
     val startedAt: Long,
@@ -24,5 +25,8 @@ data class RunningRecord(
 
     // GPS 경로 좌표 목록 (JSON 문자열)
     @ColumnInfo(defaultValue = "'[]'")
-    val routeCoordinatesJson: String = "[]"
+    val routeCoordinatesJson: String = "[]",
+
+    // 제목 필드 추가
+    val title: String = ""
 )

@@ -13,6 +13,7 @@ import java.util.Calendar
 import java.util.Locale
 import kotlinx.coroutines.launch
 import android.util.Log
+import android.content.Intent
 
 // 이번 주 통계와 최근 기록을 Room에서 불러와 표시
 class FragmentHome : Fragment(R.layout.fragment_home) {
@@ -22,16 +23,52 @@ class FragmentHome : Fragment(R.layout.fragment_home) {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        val recyclerView =
-            view.findViewById<RecyclerView>(R.id.recently_running_rv)
+        val recyclerView = view.findViewById<RecyclerView>(R.id.recently_running_rv)
 
-        recordAdapter = RecentRunningAdapter()
+//        recordAdapter = RecentRunningAdapter()
+        recordAdapter = RecentRunningAdapter { record ->
+            val intent = Intent(requireContext(), RunningResultActivity::class.java).apply {
+                putExtra("RECORD_ID", record.id)
+            }
+            startActivity(intent)
+        }
+
+        val moreBtn = view.findViewById<TextView>(R.id.more_btn)
+        moreBtn.setOnClickListener {
+            val intent = Intent(requireContext(), RunningHistoryActivity::class.java)
+            startActivity(intent)
+        }
 
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = recordAdapter
 
+        Log.d("HOME_REFRESH", "RecyclerView 인스턴스: ${recyclerView.hashCode()}")
+        Log.d("HOME_REFRESH", "어댑터 인스턴스: ${recordAdapter.hashCode()}")
+
         loadRunningRecords()
+//        deleteEmptyRouteRecords()
     }
+
+    // HomeFragment에서 최근러닝 카드뷰 데이터 삭제
+//    private fun deleteEmptyRouteRecords() {
+//        viewLifecycleOwner.lifecycleScope.launch {
+//            val dao = RunningDatabase
+//                .getDatabase(requireContext())
+//                .runningRecordDao()
+//
+//            dao.deleteRecord(3L)
+//
+//            // 삭제 후 DB에 남아 있는 기록 확인
+//            val remainingRecords = dao.getAllRecords()
+//
+//            Log.d("TEST_DELETE", "삭제 후 전체 기록: ${
+//                remainingRecords.map { it.id }
+//            }")
+//
+//            // 카드뷰와 통계 갱신
+//            loadRunningRecords()
+//        }
+//    }
 
     override fun onResume() {
         super.onResume()
@@ -51,9 +88,18 @@ class FragmentHome : Fragment(R.layout.fragment_home) {
                 .runningRecordDao()
 
             val allRecords = dao.getAllRecords()
+            val recentRecords = allRecords.take(3)
+
+            Log.d("HOME_REFRESH", "기록 조회: ${allRecords.map { it.id }}")
+            Log.d("HOME_REFRESH", "화면에 전달: ${recentRecords.map { it.id }}")
 
             // 최신 기록부터 최대 3개 표시
             recordAdapter.updateRecords(allRecords.take(3))
+
+            Log.d(
+                "HOME_REFRESH",
+                "갱신 후 어댑터 항목 수: ${recordAdapter.itemCount}"
+            )
 
             updateWeeklyStats(currentView, allRecords)
         }

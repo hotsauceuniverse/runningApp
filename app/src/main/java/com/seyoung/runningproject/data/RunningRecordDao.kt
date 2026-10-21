@@ -27,4 +27,8 @@ interface RunningRecordDao {
     // 특정 러닝 기록 삭제
     @Query("DELETE FROM running_records WHERE id = :recordId")
     suspend fun deleteRecord(recordId: Long)
+
+    // 제목 수정 쿼리
+    @Query("UPDATE running_records " + "SET title = :title WHERE id = :recordId")
+    suspend fun updateTitle(recordId: Long, title: String)
 }

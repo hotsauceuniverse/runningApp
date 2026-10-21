@@ -32,6 +32,10 @@
         </activity>
 
         <activity android:name=".RunningResultActivity"/>
+        <activity
+            android:name=".RunningHistoryActivity"
+            android:exported="false"
+            />
 
     </application>
 

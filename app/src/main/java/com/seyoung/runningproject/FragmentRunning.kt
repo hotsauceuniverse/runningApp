@@ -7,7 +7,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Rect
 import android.location.Location
 import android.os.Build
 import android.os.Bundle
@@ -15,7 +14,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.util.Log
-import android.view.PixelCopy
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
@@ -50,10 +48,11 @@ import com.kakao.vectormap.label.LabelOptions
 import com.kakao.vectormap.shape.MapPoints
 import com.kakao.vectormap.shape.Polyline
 import com.kakao.vectormap.shape.PolylineOptions
-import java.io.File
-import java.io.FileOutputStream
 
 import java.security.MessageDigest
+import java.util.Date
+import java.util.Locale
+import java.text.SimpleDateFormat
 
 import org.json.JSONArray
 
@@ -181,78 +180,6 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
 
         // Bottom Sheet 초기화 및 버튼 이벤트 연결
         setupBottomSheet(view)
-    }
-
-    // =========================
-    // 지도 이미지 저장
-    // =========================
-    private fun saveMapImage(btnRunning: Button, onComplete: (String?) -> Unit)  {
-
-        // 지도 캡쳐 전 러닝 버튼 숨김
-        btnRunning.visibility = View.INVISIBLE
-
-        // 버튼이 화면에서 사라진 후 캡쳐
-        mapView.post {
-            val bitmap = Bitmap.createBitmap(
-                mapView.width,
-                mapView.height,
-                Bitmap.Config.ARGB_8888
-            )
-            val location = IntArray(2)
-
-            mapView.getLocationOnScreen(location)
-
-            Log.d("MAP_CAPTURE", """MapView 위치X = ${location[0]}Y = ${location[1]}MapView 크기 Width = ${mapView.width}Height = ${mapView.height}""".trimIndent())
-
-            val rect = Rect(
-                location[0],
-                location[1],
-                location[0] + mapView.width,
-                location[1] + mapView.height
-            )
-
-            // PixelCopy.request()는 API 26(Android 8.0)이상 사용 가능
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                PixelCopy.request(
-                    requireActivity().window,
-                    rect,
-                    bitmap,
-                    { result ->
-
-                        // 지도 캡쳐 완료 후 버튼 다시 표시
-                        btnRunning.visibility = View.VISIBLE
-
-                        if (result == PixelCopy.SUCCESS) {
-                            try{
-                                val file = File(
-                                    requireContext().cacheDir,
-                                    "running_map.png"
-                                )
-                                FileOutputStream(file).use { outputStream ->
-                                    bitmap.compress(
-                                        Bitmap.CompressFormat.PNG,
-                                        100,
-                                        outputStream
-                                    )
-                                }
-                                Log.d("MAP_IMAGE_PATH", file.absolutePath)
-                                onComplete(file.absolutePath)
-                            } catch (e: Exception) {
-                                Log.e("MAP_IMAGE_ERROR", "이미지 저장 실패", e)
-                                onComplete(null)
-                            }
-                        } else {
-                            Log.d("MAP_IMAGE", "이미지 저장 실패 : $result")
-                            onComplete(null)
-                        }
-                    },
-                    Handler(Looper.getMainLooper())
-                )
-            } else {
-                Log.e("MAP_IMAGE", "PixelCopy는 Android 8.0 이상에서만 사용할 수 있습니다.")
-                onComplete(null)
-            }
-        }
     }
 
     // =========================
@@ -468,7 +395,6 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         pauseRunningButton.text = "일시정지"
         view.findViewById<TextView>(R.id.tv_running_active_title).text = "러닝 중"
 
-//        bottomSheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
         // 러닝 중 접힌 상태의 높이
         bottomSheetBehavior.peekHeight = dpToPx(110)
         bottomSheetBehavior.state = BottomSheetBehavior.STATE_EXPANDED
@@ -500,15 +426,13 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         val latitudes = runningPath.map { it.latitude }.toDoubleArray()
         val longitudes = runningPath.map { it.longitude }.toDoubleArray()
 
-        val intent = Intent(
-            requireContext(),
-            RunningResultActivity::class.java
-        ).apply {
+        val intent = Intent(requireContext(), RunningResultActivity::class.java).apply {
             putExtra("TOTAL_DISTANCE", distance)
             putExtra("ELAPSED_TIME", time)
             putExtra("ELEVATION_GAIN", elevation)
             putExtra("RUNNING_LATITUDES", latitudes)
             putExtra("RUNNING_LONGITUDES", longitudes)
+            putExtra("STARTED_AT", startedAt)
         }
 
         // Room 데이터베이스에 러닝 기록 저장
@@ -527,8 +451,9 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                 }.toString()
 
                 Log.d("RUNNING_DB", "저장 직전 좌표 개수: ${runningPath.size}")
-
                 Log.d("RUNNING_DB", "저장할 경로 JSON: $routeCoordinatesJson")
+
+                val title = createRunningTitle(startedAt)
 
                 // 러닝 요약 정보와 GPS 경로를 함께 저장
                 val record = RunningRecord(
@@ -536,7 +461,8 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                     totalDistanceMeters = distance,
                     elapsedTimeMillis = time,
                     elevationGainMeters = elevation,
-                    routeCoordinatesJson = routeCoordinatesJson
+                    routeCoordinatesJson = routeCoordinatesJson,
+                    title = title
                 )
 
                 val dao = RunningDatabase
@@ -544,6 +470,8 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                     .runningRecordDao()
 
                 val recordId = dao.insert(record)
+
+                Log.d("RUNNING_DB", "저장된 recordId = $recordId")
 
                 Log.d("RUNNING_DB",
                     "러닝 기록 저장 완료: id=$recordId, " +
@@ -556,10 +484,17 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
 
             } catch (e: Exception) {
                 Log.e("RUNNING_DB", "러닝 기록 저장 실패", e)
-
                 Toast.makeText(requireContext(), "러닝 기록 저장에 실패했어요.", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    private fun createRunningTitle(startedAt: Long): String {
+        val date = Date(startedAt)
+        val dayOfWeek = SimpleDateFormat("EEEE", Locale.KOREAN).format(date)
+        val amPm = SimpleDateFormat("a", Locale.KOREAN).format(date)
+
+        return "$dayOfWeek $amPm 러닝"
     }
 
     private fun resetPreRunUi(view: View) {

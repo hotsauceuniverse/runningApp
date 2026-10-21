@@ -3,6 +3,19 @@ package com.seyoung.runningproject
 import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
+import android.view.View
+import android.text.Editable
+import android.text.TextWatcher
+import android.widget.Toast
+
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import com.seyoung.runningproject.data.RunningDatabase
+import com.seyoung.runningproject.data.RunningRecord
+import org.json.JSONArray
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 import androidx.appcompat.app.AppCompatActivity
 import com.kakao.vectormap.KakaoMap
@@ -15,6 +28,7 @@ import com.kakao.vectormap.shape.MapPoints
 import com.kakao.vectormap.shape.Polyline
 import com.kakao.vectormap.shape.PolylineOptions
 import android.graphics.Color
+import android.widget.EditText
 import com.kakao.vectormap.camera.CameraUpdateFactory
 
 class RunningResultActivity : AppCompatActivity() {
@@ -47,6 +61,88 @@ class RunningResultActivity : AppCompatActivity() {
         cadenceTv = findViewById(R.id.cadence_tv)
         averageSpeedTv = findViewById(R.id.averageSpeed_tv)
 
+        // X 버튼 클릭 이벤트
+        findViewById<View>(R.id.close_btn).setOnClickListener {
+            finish()
+        }
+
+        val saveButton = findViewById<View>(R.id.btn_save)
+        val recordId = intent.getLongExtra("RECORD_ID", -1L)
+        val dayTv = findViewById<EditText>(R.id.day_tv)
+
+// 기존 제목과 제목 로딩 여부
+        var originalTitle = ""
+        var isTitleLoaded = false
+
+// 처음에는 저장 버튼 숨기기
+        saveButton.visibility = View.GONE
+
+// 제목이 실제로 변경됐을 때만 저장 버튼 표시
+        dayTv.addTextChangedListener(object : TextWatcher {
+
+            override fun beforeTextChanged(
+                s: CharSequence?,
+                start: Int,
+                count: Int,
+                after: Int
+            ) {}
+
+            override fun onTextChanged(
+                s: CharSequence?,
+                start: Int,
+                before: Int,
+                count: Int
+            ) {
+                if (recordId != -1L && isTitleLoaded) {
+                    val currentTitle = s.toString().trim()
+
+                    saveButton.visibility =
+                        if (currentTitle != originalTitle) {
+                            View.VISIBLE
+                        } else {
+                            View.GONE
+                        }
+                }
+            }
+
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+// 저장 버튼 클릭 시 DB에 제목 저장
+        saveButton.setOnClickListener {
+            if (recordId == -1L) {
+                return@setOnClickListener
+            }
+            val newTitle = dayTv.text.toString().trim()
+
+            if (newTitle.isBlank()) {
+                Toast.makeText(this, "러닝 제목을 입력해 주세요.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            lifecycleScope.launch {
+                try {
+                    val dao = RunningDatabase
+                        .getDatabase(this@RunningResultActivity)
+                        .runningRecordDao()
+
+                    dao.updateTitle(recordId, newTitle)
+
+                    // 저장 완료 후 기준 제목 갱신
+                    originalTitle = newTitle
+                    saveButton.visibility = View.GONE
+
+                    Toast.makeText(this@RunningResultActivity, "러닝 제목이 저장되었습니다.", Toast.LENGTH_SHORT).show()
+                    Log.d("RUN_TITLE", "제목 저장 완료: $newTitle")
+
+                } catch (e: Exception) {
+                    Log.e("RUN_TITLE", "제목 저장 실패", e)
+
+                    Toast.makeText(this@RunningResultActivity, "제목 저장에 실패했습니다.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
         // Kakao MapView 연결
         resultMap = findViewById(R.id.result_map_image)
         KakaoMapSdk.init(
@@ -54,13 +150,99 @@ class RunningResultActivity : AppCompatActivity() {
             BuildConfig.KAKAO_MAP_KEY
         )
 
-        // 러닝 데이터
-        runningData()
+        lifecycleScope.launch {
+            Log.d("RUN_TITLE", "recordId = $recordId")
+            if (recordId != -1L) {
+                // 과거 러닝 기록 조회
+                val dao = RunningDatabase
+                    .getDatabase(this@RunningResultActivity)
+                    .runningRecordDao()
 
-        // 러닝 경로 받기
-        getRunningPath()
+                val record = dao.getRecordById(recordId)
 
-        // 지도 시작
+                if (record == null) {
+                    Log.e("RESULT_HISTORY", "기록을 찾을 수 없습니다. ID: $recordId")
+                    finish()
+                    return@launch
+                }
+
+                Log.d("RESULT_HISTORY", "과거 기록 조회 성공: ID=${record.id}")
+
+                // DB 데이터로 결과 화면 구성
+                runningData(record)
+
+                // DB에 저장된 GPS 경로 복원
+                getRunningPath(record)
+
+                // 제목 설정
+                val savedTitle = record.title.ifBlank {
+                    createRunningTitle(record.startedAt)
+                }
+                dayTv.setText(savedTitle)
+
+                // 현재 제목을 기준값으로 저장
+                originalTitle = savedTitle
+                isTitleLoaded = true
+
+                // 최초 로딩 시에는 저장 버튼 숨김
+                saveButton.visibility = View.GONE
+
+                // 날짜 표시
+                findViewById<TextView>(R.id.date_tv).text = SimpleDateFormat("yyyy년 M월 d일", Locale.KOREA).format(Date(record.startedAt))
+
+            } else {
+                Log.d("RUN_TITLE", "새 러닝 결과 else 진입")
+                // 새 러닝 결과 화면의 제목 설정
+                setRunningTitle()
+
+                // 기존 새 러닝 결과 표시 로직 유지
+                runningData()       // 러닝 데이터
+                getRunningPath()    // 러닝 경로 받기
+            }
+
+            // 데이터와 경로를 준비한 다음 지도 시작
+            startResultMap()
+        }
+    }
+
+    private fun createRunningTitle(startedAt: Long): String {
+        val date = Date(startedAt)
+        val dayOfWeek = SimpleDateFormat("EEEE", Locale.KOREAN).format(date)
+        val amPm = SimpleDateFormat("a", Locale.KOREAN).format(date)
+
+        return "$dayOfWeek $amPm 러닝"
+    }
+
+    // ======================
+    // 요일과 오전/오후를 설정
+    // ======================
+    private fun setRunningTitle() {
+        Log.d("RUN_TITLE", "setRunningTitle() 실행됨")
+        val dayTv = findViewById<EditText>(R.id.day_tv)
+
+        // 실제 러닝 시작 시각 가져오기
+        val startedAt = intent.getLongExtra("STARTED_AT", -1L)
+        if (startedAt == -1L) {
+            Log.e("RUN_TITLE", "STARTED_AT 값이 전달되지 않았습니다.")
+            return
+        }
+        val runDate = Date(startedAt)
+
+        // 실제 날짜에 맞는 요일 계산
+        val datOfWeek = SimpleDateFormat("EEEE", Locale.KOREA).format(runDate)
+
+        // 실제 시작 시각에 맞는 오전/오후 계산
+        val amPm = SimpleDateFormat("a", Locale.KOREA).format(runDate)
+        dayTv.setText("$datOfWeek $amPm 러닝")
+        Log.d("RUN_TITLE", "설정된 제목 = ${dayTv.text}")
+    }
+
+
+
+    // =================
+    // 지도 시작
+    // =================
+    private fun startResultMap() {
         resultMap.start(
             object : MapLifeCycleCallback() {
                 override fun onMapDestroy() {
@@ -68,7 +250,9 @@ class RunningResultActivity : AppCompatActivity() {
                 }
 
                 override fun onMapError(error: Exception) {
-                    Log.e("RESULT_MAP", "결과 지도 에러: ${error.message}",
+                    Log.e(
+                        "RESULT_MAP",
+                        "결과 지도 에러: ${error.message}",
                         error
                     )
                 }
@@ -76,6 +260,7 @@ class RunningResultActivity : AppCompatActivity() {
             object : KakaoMapReadyCallback() {
                 override fun onMapReady(kakaoMap: KakaoMap) {
                     Log.d("RESULT_MAP", "결과 지도 준비 완료")
+
                     this@RunningResultActivity.kakaoMap = kakaoMap
                     // 러닝 경로 그리기
                     drawRunningPath(kakaoMap)
@@ -85,22 +270,17 @@ class RunningResultActivity : AppCompatActivity() {
                 }
 
                 override fun getPosition(): LatLng {
-                    // 경로가 있으면 첫 번째 위치
-                    if (runningPath.isNotEmpty()) {
-                        return runningPath.first()
+                    return if (runningPath.isNotEmpty()) {
+                        // 경로가 있으면 첫 번째 위치
+                        runningPath.first()
+                    } else {
+                        // 경로가 없으면 서울 시청
+                        LatLng.from(37.5665, 126.9780)
                     }
-
-                    // 경로가 없으면 서울 시청
-                    return LatLng.from(
-                        37.5665,
-                        126.9780
-                    )
                 }
-                override fun getZoomLevel(): Int {
-                    // 초기값
-                    // 실제 경로에 맞는 줌은 onMapReady()에서 fitRunningPath()가 결정
-                    return 15
-                }
+                // 초기값
+                // 실제 경로에 맞는 줌은 onMapReady()에서 fitRunningPath()가 결정
+                override fun getZoomLevel(): Int = 15
             }
         )
     }
@@ -108,12 +288,16 @@ class RunningResultActivity : AppCompatActivity() {
     // =========================
     // 러닝 결과 데이터 화면 표시
     // =========================
-    private fun runningData() {
+    private fun runningData(record: RunningRecord? = null) {
         // 데이터 받기
-        val totalDistance = intent.getDoubleExtra("TOTAL_DISTANCE", 0.0)
-        val elapsedTime = intent.getLongExtra("ELAPSED_TIME", 0L)
-        Log.d("elapsedTime", "${elapsedTime / 1000}초")
-        val elevationGain = intent.getDoubleExtra("ELEVATION_GAIN", 0.0)
+        val totalDistance = record?.totalDistanceMeters
+            ?: intent.getDoubleExtra("TOTAL_DISTANCE", 0.0)
+
+        val elapsedTime = record?.elapsedTimeMillis
+            ?: intent.getLongExtra("ELAPSED_TIME", 0L)
+
+        val elevationGain = record?.elevationGainMeters
+            ?: intent.getDoubleExtra("ELEVATION_GAIN", 0.0)
 
         // 킬로미터 계산 (m → km 변환)
         val distanceKm = totalDistance / 1000.0
@@ -190,16 +374,48 @@ class RunningResultActivity : AppCompatActivity() {
 
         // 상승고도 데이터 값 받기
         elevationGainTv.text = String.format("%.0f m", elevationGain)
-
-        // 러닝 지도 이미지 표시
-//        val imagePath = intent.getStringExtra("MAP_IMAGE_PATH")
-//        Log.d("MAP_RESULT", "받은 이미지 경로 = $imagePath")
     }
 
     // =========================
     // 러닝 경로 받기
     // =========================
-    private fun getRunningPath() {
+    private fun getRunningPath(record: RunningRecord? = null) {
+        runningPath.clear()
+
+        // 과거 기록이면 DB에 저장된 JSON 경로 사용
+        if (record != null) {
+            try {
+                val jsonArray = JSONArray(record.routeCoordinatesJson)
+
+                for (i in 0 until jsonArray.length()) {
+                    val point = jsonArray.optJSONArray(i) ?: continue
+
+                    if (point.length() < 2) continue
+
+                    val latitude = point.optDouble(0, Double.NaN)
+                    val longitude = point.optDouble(1, Double.NaN)
+
+                    if (!latitude.isFinite() || !longitude.isFinite()) {
+                        continue
+                    }
+
+                    runningPath.add(
+                        LatLng.from(latitude, longitude)
+                    )
+                }
+
+                Log.d(
+                    "RESULT_PATH",
+                    "DB 경로 복원 완료: 기록 ID=${record.id}, 좌표=${runningPath.size}개"
+                )
+            } catch (e: Exception) {
+                Log.e("RESULT_PATH", "DB 경로 JSON 파싱 실패", e)
+            }
+
+            return
+        }
+
+        // 새 러닝이면 기존 Intent 배열 사용
         val latitudes = intent.getDoubleArrayExtra("RUNNING_LATITUDES")
         val longitudes = intent.getDoubleArrayExtra("RUNNING_LONGITUDES")
 
@@ -207,20 +423,19 @@ class RunningResultActivity : AppCompatActivity() {
             Log.e("RESULT_PATH", "러닝 경로 데이터가 없습니다.")
             return
         }
+
         if (latitudes.size != longitudes.size) {
             Log.e("RESULT_PATH", "위도와 경도의 개수가 일치하지 않습니다.")
             return
         }
-        runningPath.clear()
 
         for (i in latitudes.indices) {
             runningPath.add(
-                LatLng.from(
-                    latitudes[i], longitudes[i]
-                )
+                LatLng.from(latitudes[i], longitudes[i])
             )
         }
-        Log.d("RESULT_PATH", "러닝 경로 ${runningPath.size}개 좌표 받음")
+
+        Log.d("RESULT_PATH", "새 러닝 경로 ${runningPath.size}개 좌표 받음")
     }
 
     // =========================
@@ -256,13 +471,6 @@ class RunningResultActivity : AppCompatActivity() {
         // 지도에 Polyline 추가
         runningPolyline = layer.addPolyline(options)
         Log.d("RESULT_PATH", "결과 화면 Polyline 그리기 완료")
-
-
-        // 첫 번째 위치로 카메라 이동
-//        val firstPosition = runningPath.first()
-//
-//        kakaoMap.moveCamera(CameraUpdateFactory.newCenterPosition(firstPosition)
-//        )
     }
 
     private fun fitRunningPath(kakaoMap: KakaoMap) {
@@ -291,7 +499,6 @@ class RunningResultActivity : AppCompatActivity() {
         val cameraUpdate = CameraUpdateFactory.fitMapPoints(points, padding)
         kakaoMap.moveCamera(cameraUpdate)
         Log.d("RESULT_MAP", "러닝 경로에 맞춰 지도 자동 맞춤 완료 / " + "좌표개수 : ${runningPath.size} / " + "padding : ${padding}px")
-
     }
 
     // =========================

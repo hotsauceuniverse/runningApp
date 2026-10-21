@@ -21,13 +21,11 @@ import kotlin.math.max
 import kotlin.math.min
 
 // 저장된 기록을 카드 형태로 표시
-class RecentRunningAdapter :
-    RecyclerView.Adapter<RecentRunningAdapter.RunningViewHolder>() {
+class RecentRunningAdapter(private val onRecordClick: (RunningRecord) -> Unit) : RecyclerView.Adapter<RecentRunningAdapter.RunningViewHolder>() {
 
     private val records = mutableListOf<RunningRecord>()
 
-    class RunningViewHolder(itemView: View) :
-        RecyclerView.ViewHolder(itemView) {
+    class RunningViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
 
         val mapImage: ImageView =
             itemView.findViewById(R.id.recently_map_iv)
@@ -45,10 +43,7 @@ class RecentRunningAdapter :
             itemView.findViewById(R.id.pace_total)
     }
 
-    override fun onCreateViewHolder(
-        parent: ViewGroup,
-        viewType: Int
-    ): RunningViewHolder {
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RunningViewHolder {
         val view = LayoutInflater.from(parent.context)
             .inflate(R.layout.item_recently_running, parent, false)
 
@@ -100,6 +95,10 @@ class RecentRunningAdapter :
         } else {
             "--/km"
         }
+        // 카드 클릭 시 선택한 러닝 기록 전달
+        holder.itemView.setOnClickListener {
+            onRecordClick(record)
+        }
 
         // 저장된 러닝 경로 JSON 확인
         Log.d("RECENT_ROUTE",
@@ -116,6 +115,21 @@ class RecentRunningAdapter :
                 "경로 이미지 생성 성공 - 기록 ID: ${record.id}, " +
                         "이미지 크기: ${routeBitmap.width}x${routeBitmap.height}"
             )
+
+            Log.d(
+                "RECENT_ROUTE",
+                "이미지 설정 완료 - 기록 ID: ${record.id}, " +
+                        "ImageView 크기: ${holder.mapImage.width}x${holder.mapImage.height}, " +
+                        "Drawable: ${holder.mapImage.drawable}"
+            )
+
+            Log.d(
+                "RECENT_ROUTE",
+                "ImageView ID: ${holder.mapImage.id}, " +
+                        "Drawable 크기: ${holder.mapImage.drawable?.intrinsicWidth}x" +
+                        "${holder.mapImage.drawable?.intrinsicHeight}"
+            )
+
         } else {
             // 좌표가 없으면 기존 기본 이미지 유지
             holder.mapImage.setImageResource(R.drawable.ic_launcher_background)
@@ -149,19 +163,13 @@ class RecentRunningAdapter :
         try {
             val jsonArray = JSONArray(routeCoordinatesJson)
 
-            Log.d(
-                "RECENT_ROUTE",
-                "JSON 배열 파싱 성공 - 좌표 개수: ${jsonArray.length()}"
-            )
+            Log.d("RECENT_ROUTE", "JSON 배열 파싱 성공 - 좌표 개수: ${jsonArray.length()}")
 
             for (i in 0 until jsonArray.length()) {
                 val point = jsonArray.optJSONArray(i)
 
                 if (point == null || point.length() < 2) {
-                    Log.w(
-                        "RECENT_ROUTE",
-                        "잘못된 좌표 형식 - 인덱스: $i"
-                    )
+                    Log.w("RECENT_ROUTE", "잘못된 좌표 형식 - 인덱스: $i")
                     continue
                 }
 
@@ -169,30 +177,19 @@ class RecentRunningAdapter :
                 val longitude = point.optDouble(1, Double.NaN)
 
                 if (!latitude.isFinite() || !longitude.isFinite()) {
-                    Log.w(
-                        "RECENT_ROUTE",
-                        "유효하지 않은 좌표 - 인덱스: $i, " +
-                                "위도: $latitude, 경도: $longitude"
-                    )
+                    Log.w("RECENT_ROUTE", "유효하지 않은 좌표 - 인덱스: $i, " + "위도: $latitude, 경도: $longitude")
                     continue
                 }
 
                 coordinates.add(latitude to longitude)
             }
         } catch (e: Exception) {
-            Log.e(
-                "RECENT_ROUTE",
-                "경로 JSON 파싱 실패",
-                e
-            )
+            Log.e("RECENT_ROUTE", "경로 JSON 파싱 실패", e)
             return null
         }
 
         if (coordinates.isEmpty()) {
-            Log.w(
-                "RECENT_ROUTE",
-                "사용 가능한 좌표가 없음"
-            )
+            Log.w("RECENT_ROUTE", "사용 가능한 좌표가 없음")
             return null
         }
 
