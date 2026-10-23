@@ -17,6 +17,9 @@ if (localPropertiesFile.exists()) {
 val kakaoMapKey = properties.getProperty("KAKAO_MAP_KEY")
     ?: throw GradleException("KAKAO_MAP_KEY가 local.properties에 없습니다.")
 
+val kakaoRestApiKey = properties.getProperty("KAKAO_REST_API_KEY")
+    ?: throw GradleException("KAKAO_REST_API_KEY가 local.properties에 없습니다.")
+
 android {
     namespace = "com.seyoung.runningproject"
     compileSdk = 36
@@ -38,6 +41,12 @@ android {
             "String",
             "KAKAO_MAP_KEY",
             "\"$kakaoMapKey\""
+        )
+
+        buildConfigField(
+            "String",
+            "KAKAO_REST_API_KEY",
+            "\"$kakaoRestApiKey\""
         )
     }
 

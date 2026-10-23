@@ -38,7 +38,6 @@ class RunningResultActivity : AppCompatActivity() {
     private lateinit var timeTv: TextView
     private lateinit var calorieTv: TextView
     private lateinit var elevationGainTv: TextView
-    private lateinit var cadenceTv: TextView
     private lateinit var averageSpeedTv: TextView
 
     // 결과 화면 카카오 지도
@@ -58,7 +57,6 @@ class RunningResultActivity : AppCompatActivity() {
         timeTv = findViewById(R.id.time_tv)
         calorieTv = findViewById(R.id.calorie_tv)
         elevationGainTv = findViewById(R.id.distance_tv)
-        cadenceTv = findViewById(R.id.cadence_tv)
         averageSpeedTv = findViewById(R.id.averageSpeed_tv)
 
         // X 버튼 클릭 이벤트

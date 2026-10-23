@@ -26,7 +26,8 @@
             android:layout_width="40dp"
             android:layout_height="4dp"
             android:layout_gravity="center_horizontal"
-            android:background="#CCCCCC" />
+            android:background="#CCCCCC"
+            />
 
         <!-- 제목 -->
         <TextView
@@ -37,7 +38,8 @@
             android:text="오늘 어떻게 뛸까요?"
             android:textColor="@android:color/black"
             android:textSize="20sp"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            />
 
         <!-- ====================================== -->
         <!-- 러닝 모드 선택 -->
@@ -50,7 +52,8 @@
             android:layout_marginTop="16dp"
             android:background="#EEEEEE"
             android:orientation="horizontal"
-            android:padding="4dp">
+            android:padding="4dp"
+            >
 
             <TextView
                 android:id="@+id/btn_mode_recommended"
@@ -61,7 +64,8 @@
                 android:text="🗺 추천 경로"
                 android:textColor="@android:color/black"
                 android:textSize="15sp"
-                android:textStyle="bold" />
+                android:textStyle="bold"
+                />
 
             <TextView
                 android:id="@+id/btn_mode_free"
@@ -71,7 +75,8 @@
                 android:gravity="center"
                 android:text="🏃 내 맘대로"
                 android:textColor="@android:color/black"
-                android:textSize="15sp" />
+                android:textSize="15sp"
+                />
 
         </LinearLayout>
 
@@ -85,7 +90,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            >
 
             <TextView
                 android:id="@+id/tv_recommended_title"
@@ -94,36 +100,83 @@
                 android:text="추천 경로"
                 android:textColor="@android:color/black"
                 android:textSize="17sp"
-                android:textStyle="bold" />
+                android:textStyle="bold"
+                />
+
+            <!-- 출발지 검색 -->
+            <EditText
+                android:id="@+id/et_route_start"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="12dp"
+                android:background="@android:drawable/edit_text"
+                android:hint="출발지 검색 (예: 여의도역)"
+                android:textColor="@color/black"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:singleLine="true"
+                android:inputType="text"
+                android:imeOptions="actionNext"
+                />
+
+            <!-- 도착지 검색 -->
+            <EditText
+                android:id="@+id/et_route_end"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:background="@android:drawable/edit_text"
+                android:hint="도착지 검색 (예: 여의도공원)"
+                android:textColor="@color/black"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:singleLine="true"
+                android:inputType="text"
+                android:imeOptions="actionSearch"
+                />
+
+            <!-- 경로 검색 버튼 -->
+            <Button
+                android:id="@+id/btn_search_route"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:text="장소로 경로 검색"
+                android:textSize="14sp"
+                />
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                >
 
                 <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:orientation="vertical">
+                    android:orientation="vertical"
+                    >
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="거리"
                         android:textColor="#777777"
-                        android:textSize="13sp" />
+                        android:textSize="13sp"
+                        />
 
                     <TextView
                         android:id="@+id/tv_recommended_distance"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="5.2 km"
+                        android:text="0 km"
                         android:textColor="@android:color/black"
                         android:textSize="20sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        />
 
                 </LinearLayout>
 
@@ -131,24 +184,27 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:orientation="vertical">
+                    android:orientation="vertical"
+                    >
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="예상 시간"
                         android:textColor="#777777"
-                        android:textSize="13sp" />
+                        android:textSize="13sp"
+                        />
 
                     <TextView
                         android:id="@+id/tv_recommended_time"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="32분"
+                        android:text="0 분"
                         android:textColor="@android:color/black"
                         android:textSize="20sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        />
 
                 </LinearLayout>
 
@@ -156,24 +212,27 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:orientation="vertical">
+                    android:orientation="vertical"
+                    >
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="고도"
                         android:textColor="#777777"
-                        android:textSize="13sp" />
+                        android:textSize="13sp"
+                        />
 
                     <TextView
                         android:id="@+id/tv_recommended_elevation"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="+48 m"
+                        android:text="0 m"
                         android:textColor="@android:color/black"
                         android:textSize="20sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        />
 
                 </LinearLayout>
 
@@ -186,7 +245,8 @@
                 android:layout_height="48dp"
                 android:layout_marginTop="16dp"
                 android:text="다른 경로 보기"
-                android:textSize="14sp" />
+                android:textSize="14sp"
+                />
 
         </LinearLayout>
 
@@ -201,7 +261,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:orientation="vertical"
-            android:visibility="gone">
+            android:visibility="gone"
+            >
 
             <TextView
                 android:id="@+id/tv_free_running_title"
@@ -210,7 +271,8 @@
                 android:text="내 맘대로 러닝"
                 android:textColor="@android:color/black"
                 android:textSize="17sp"
-                android:textStyle="bold" />
+                android:textStyle="bold"
+                />
 
             <TextView
                 android:layout_width="match_parent"
@@ -218,7 +280,8 @@
                 android:layout_marginTop="6dp"
                 android:text="원하는 곳으로 자유롭게 달려보세요."
                 android:textColor="#777777"
-                android:textSize="14sp" />
+                android:textSize="14sp"
+                />
 
             <!-- 목표 거리 -->
             <TextView
@@ -229,14 +292,16 @@
                 android:text="목표 거리"
                 android:textColor="@android:color/black"
                 android:textSize="15sp"
-                android:textStyle="bold" />
+                android:textStyle="bold"
+                />
 
             <LinearLayout
                 android:id="@+id/target_distance_selector"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="8dp"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                >
 
                 <Button
                     android:id="@+id/btn_target_none"
@@ -244,7 +309,8 @@
                     android:layout_height="match_parent"
                     android:layout_weight="1"
                     android:text="제한 없음"
-                    android:textSize="12sp" />
+                    android:textSize="12sp"
+                    />
 
                 <Button
                     android:id="@+id/btn_target_3km"
@@ -253,7 +319,8 @@
                     android:layout_marginStart="4dp"
                     android:layout_weight="1"
                     android:text="3 km"
-                    android:textSize="12sp" />
+                    android:textSize="12sp"
+                    />
 
                 <Button
                     android:id="@+id/btn_target_5km"
@@ -262,7 +329,8 @@
                     android:layout_marginStart="4dp"
                     android:layout_weight="1"
                     android:text="5 km"
-                    android:textSize="12sp" />
+                    android:textSize="12sp"
+                    />
 
                 <Button
                     android:id="@+id/btn_target_10km"
@@ -271,12 +339,12 @@
                     android:layout_marginStart="4dp"
                     android:layout_weight="1"
                     android:text="10 km"
-                    android:textSize="12sp" />
+                    android:textSize="12sp"
+                    />
 
             </LinearLayout>
 
         </LinearLayout>
-
 
         <!-- ====================================== -->
         <!-- 러닝 시작 버튼 -->
@@ -289,8 +357,8 @@
             android:layout_marginTop="20dp"
             android:text="러닝 시작"
             android:textSize="16sp"
-            android:textStyle="bold" />
-
+            android:textStyle="bold"
+            />
 
         <!-- ====================================== -->
         <!-- 러닝 중 영역 -->
@@ -301,7 +369,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:visibility="gone">
+            android:visibility="gone"
+            >
 
             <TextView
                 android:id="@+id/tv_running_active_title"
@@ -310,27 +379,31 @@
                 android:text="러닝 중"
                 android:textColor="@android:color/black"
                 android:textSize="17sp"
-                android:textStyle="bold" />
+                android:textStyle="bold"
+                />
 
             <!-- 거리 / 시간 -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                >
 
                 <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:orientation="vertical">
+                    android:orientation="vertical"
+                    >
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="거리"
                         android:textColor="#777777"
-                        android:textSize="13sp" />
+                        android:textSize="13sp"
+                        />
 
                     <TextView
                         android:id="@+id/tv_running_distance"
@@ -340,7 +413,8 @@
                         android:text="0.00 km"
                         android:textColor="@android:color/black"
                         android:textSize="22sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        />
 
                 </LinearLayout>
 
@@ -348,14 +422,16 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:orientation="vertical">
+                    android:orientation="vertical"
+                    >
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="시간"
                         android:textColor="#777777"
-                        android:textSize="13sp" />
+                        android:textSize="13sp"
+                        />
 
                     <TextView
                         android:id="@+id/tv_running_time"
@@ -365,7 +441,8 @@
                         android:text="00:00"
                         android:textColor="@android:color/black"
                         android:textSize="22sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        />
 
                 </LinearLayout>
 
@@ -373,14 +450,16 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:orientation="vertical">
+                    android:orientation="vertical"
+                    >
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="페이스"
                         android:textColor="#777777"
-                        android:textSize="13sp" />
+                        android:textSize="13sp"
+                        />
 
                     <TextView
                         android:id="@+id/tv_running_pace"
@@ -402,14 +481,16 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="20dp"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                >
 
                 <Button
                     android:id="@+id/btn_pause_running"
                     android:layout_width="0dp"
                     android:layout_height="52dp"
                     android:layout_weight="1"
-                    android:text="일시정지" />
+                    android:text="일시정지"
+                    />
 
                 <Button
                     android:id="@+id/btn_stop_running"
@@ -417,7 +498,8 @@
                     android:layout_height="52dp"
                     android:layout_marginStart="8dp"
                     android:layout_weight="1"
-                    android:text="러닝 종료" />
+                    android:text="러닝 종료"
+                    />
 
             </LinearLayout>
 

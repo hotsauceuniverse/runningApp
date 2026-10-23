@@ -18,6 +18,8 @@ import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.EditText
+import android.os.SystemClock
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import androidx.core.app.ActivityCompat
 import androidx.fragment.app.Fragment
@@ -25,6 +27,8 @@ import androidx.core.view.doOnLayout
 import androidx.lifecycle.lifecycleScope
 
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 import com.seyoung.runningproject.data.RunningDatabase
 import com.seyoung.runningproject.data.RunningRecord
@@ -53,8 +57,12 @@ import java.security.MessageDigest
 import java.util.Date
 import java.util.Locale
 import java.text.SimpleDateFormat
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 
 import org.json.JSONArray
+import org.json.JSONObject
 
 class FragmentRunning : Fragment(R.layout.fragment_running) {
 
@@ -78,18 +86,77 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     private val runningPath = mutableListOf<LatLng>()   // runningPath 리스트 만들기 (러닝 GPS 경로 저장)
     private var runningPolyline: Polyline? = null       // 지도에 표시되는 러닝 경로 선
 
-    // 러닝 타이머
-    // 실제 움직인 시간 누적
+    // API에서 조회한 추천 경로는 실제 러닝 경로와 별도 관리
+    private var recommendedPolyline: Polyline? = null
+    private var isRouteRequesting = false
+
+    // 추천 경로 출발지·도착지 마커
+    private var routeStartLabel: Label? = null
+    private var routeEndLabel: Label? = null
+
+    // 장소 검색으로 선택한 출발지와 도착지
+    private var routeStartLatLng: LatLng? = null
+    private var routeEndLatLng: LatLng? = null
+
+    private var routeStartName = ""
+    private var routeEndName = ""
+
+    // 추천 경로 옵션
+    private data class RecommendedRoute(
+        val mode: String,
+        val points: List<LatLng>,
+        val distanceMeters: Double,
+        val durationSeconds: Long
+    )
+
+    private var recommendedRoutes: List<RecommendedRoute> = emptyList()
+    private var selectedRouteIndex = 0
+
+    // 러닝 시작 시 선택한 추천 경로 보관
+    private var activeRecommendedRoute: RecommendedRoute? = null
+
+    // 전체 러닝 시간
+    // 시작부터 종료까지, 직접 일시정지한 시간만 제외
     private var elapsedTime = 0L
 
-    // 러닝 시작 시각
+    // 러닝 시작 시각 (날짜 및 시각 저장용)
     private var runningStartedAt = 0L
+
+    // 러닝 시작 이후 경과 시간 측정용
+    private var runningStartedElapsedRealtime = 0L
+
+    // 직접 일시정지한 시간의 누적값
+    private var pausedDurationMillis = 0L
+
+    // 현재 일시정지를 시작한 시각
+    private var pauseStartedElapsedRealtime = 0L
 
     // 마지막 GPS 위치가 들어온 시간
     private var lastLocationTime = 0L
 
     // 현재 사용자가 움직이고 있는지
     private var isMoving = false
+
+    // GPS 자동 일시정지 상태
+    private var isAutoPaused = false
+
+    // 마지막으로 움직임이 확인된 시각
+    private var lastMovementElapsedRealtime = 0L
+
+    // 자동 일시정지가 시작된 시각
+    private var autoPauseStartedElapsedRealtime = 0L
+
+    // 자동 일시정지 시간 누적
+    private var autoPausedDurationMillis = 0L
+
+    // 움직임이 없을 때 자동 정지까지 기다릴 시간: 3초
+    private val AUTO_PAUSE_DELAY_MILLIS = 3000L
+
+    // 이동 여부를 판단하기 위한 기준 GPS 위치
+    private var movementAnchorLocation: Location? = null
+
+    // 신뢰할 수 있는 GPS가 마지막으로 들어온 시각
+    private var lastReliableGpsElapsedRealtime = 0L
 
     // 1초마다 화면/로그 확인
     private var timerHandler = Handler(Looper.getMainLooper())
@@ -117,31 +184,46 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     private var isPaused = false
     private var hasShownTargetDistanceNotice = false
 
+    // 현위치 중심으로 카메라를 자동 이동할지 여부
+    private var isCameraFollowingCurrentLocation = true
+
     private val runningResultLauncher =
         registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
         ) {
-            // 결과 화면에서 돌아오면 항상 러닝 UI 초기화
+            // 결과 화면에서 돌아오면 러닝 상태 초기화
             isRunning = false
             isPaused = false
             previousLocation = null
             lastLocationTime = 0L
             isMoving = false
 
+            // 이전 러닝의 파란색 경로 제거
+            runningPolyline?.remove()
+            runningPolyline = null
+
+            // 이전 러닝의 GPS 경로 좌표 초기화
+            runningPath.clear()
+
+            // 다음 러닝을 위해 러닝 데이터 초기화
+            totalDistance = 0.0
+            elapsedTime = 0L
+            totalElevationGain = 0.0
+            previousAltitude = null
+
             view?.let { currentView ->
                 resetPreRunUi(currentView)
                 updateRunningStats()
             }
-
-            Log.d("RUNNING", "결과 화면에서 돌아옴 → 러닝 초기화")
+            Log.d("RUNNING", "결과 화면에서 돌아옴 → 러닝 상태 및 파란 경로 초기화")
         }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
         // =========================
         // GPS 위치 서비스 초기화
         // =========================
-
         fusedLocationClient =
             LocationServices.getFusedLocationProviderClient(
                 requireContext()
@@ -228,6 +310,663 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         Log.d("RUNNING_PATH", "테스트 경로 그리기 완료 / 좌표 개수: ${runningPath.size}")
     }
 
+    // 지정된 출발지와 도착지로 도보 경로 요청
+    private fun requestWalkingRoute(startPoint: LatLng, endPoint: LatLng) {
+        if (isRouteRequesting) return
+
+        val apiKey = BuildConfig.KAKAO_REST_API_KEY
+        isRouteRequesting = true
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val routes = withContext(Dispatchers.IO) {
+                    val modes = listOf(
+                        "BROAD_FIRST",
+                        "SHORTEST",
+                        "ACCESSIBLE"
+                    )
+
+                    val foundRoutes = mutableListOf<RecommendedRoute>()
+                    val signatures = mutableSetOf<String>()
+
+                    for (mode in modes) {
+                        try {
+                            val result = fetchWalkingRoute(
+                                startPoint = startPoint,
+                                endPoint = endPoint,
+                                routeMode = mode,
+                                apiKey = apiKey
+                            )
+
+                            if (result.points.size < 2) continue
+
+                            val signature = routeSignature(result.points)
+
+                            if (signatures.add(signature)) {
+                                foundRoutes.add(
+                                    RecommendedRoute(
+                                        mode = when (mode) {
+                                            "BROAD_FIRST" -> "넓은 길 우선"
+                                            "SHORTEST" -> "최단 경로"
+                                            "ACCESSIBLE" -> "편안한 길"
+                                            else -> "도보"
+                                        },
+                                        points = result.points,
+                                        distanceMeters = result.distanceMeters,
+                                        durationSeconds = result.durationSeconds
+                                    )
+                                )
+                            }
+                        } catch (e: Exception) {
+                            Log.w("WALK_API", "$mode 경로 조회 실패: ${e.message}")
+                        }
+                    }
+                    foundRoutes
+                }
+
+                if (routes.isEmpty()) {
+                    Toast.makeText(requireContext(), "도보 경로를 찾지 못했어요. 출발지와 도착지를 확인해 주세요.", Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+
+                val map = kakaoMap
+                if (map == null) {
+                    Toast.makeText(requireContext(), "지도가 아직 준비되지 않았어요.", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+
+                // 경로 조회가 성공했으므로 현위치 카메라 추적 중지
+                isCameraFollowingCurrentLocation = false
+
+                recommendedPolyline?.remove()
+                recommendedPolyline = null
+
+                recommendedRoutes = routes
+                selectedRouteIndex = 0
+                activeRecommendedRoute = routes.first()
+
+                displayRecommendedRoute(map, routes.first())
+
+//                Toast.makeText(requireContext(), "서로 다른 도보 경로 ${routes.size}개를 찾았어요.", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Log.e("WALK_API", "도보 경로 조회 실패", e)
+
+                Toast.makeText(requireContext(), "경로 조회 실패: ${e.message ?: "알 수 없는 오류"}", Toast.LENGTH_LONG).show()
+            } finally {
+                isRouteRequesting = false
+            }
+        }
+    }
+
+    // =========================
+    // 다른 경로 보기 기능 추가
+    // =========================
+    private fun showNextRecommendedRoute() {
+        if (recommendedRoutes.size <= 1) {
+            Toast.makeText(requireContext(), "다른 도보 경로가 없어요.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val map = kakaoMap
+        if (map == null) {
+            Toast.makeText(requireContext(), "지도가 아직 준비되지 않았어요.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        selectedRouteIndex = (selectedRouteIndex + 1) % recommendedRoutes.size
+
+        val selectedRoute = recommendedRoutes[selectedRouteIndex]
+
+        recommendedPolyline?.remove()
+        recommendedPolyline = null
+
+        displayRecommendedRoute(map, selectedRoute)
+
+//        Toast.makeText(requireContext(), "경로 ${selectedRouteIndex + 1}/${recommendedRoutes.size}: ${selectedRoute.mode}", Toast.LENGTH_SHORT).show()
+    }
+
+    // =========================
+    // 도보 경로 API 요청 함수
+    // =========================
+    private fun fetchWalkingRoute(startPoint: LatLng, endPoint: LatLng, routeMode: String, apiKey: String): WalkingRouteResult {
+        val startLat = startPoint.latitude
+        val startLon = startPoint.longitude
+        val endLat = endPoint.latitude
+        val endLon = endPoint.longitude
+
+        val url = URL(
+            "https://dapi.kakao.com/v2/routing/walk" +
+                    "?start_x=$startLon" +
+                    "&start_y=$startLat" +
+                    "&end_x=$endLon" +
+                    "&end_y=$endLat" +
+                    "&route_mode=$routeMode"
+        )
+
+        val connection = url.openConnection() as HttpURLConnection
+
+        try {
+            connection.requestMethod = "GET"
+            connection.setRequestProperty(
+                "Authorization",
+                "KakaoAK $apiKey"
+            )
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val statusCode = connection.responseCode
+            val stream = if (statusCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
+
+            val response = stream
+                ?.bufferedReader()
+                ?.use { it.readText() }
+                .orEmpty()
+
+            if (statusCode !in 200..299) {
+                throw Exception("HTTP $statusCode: $response")
+            }
+
+            Log.d("WALK_API_RESPONSE", "탐색 옵션: $routeMode, 응답: $response")
+            return parseWalkingRoute(response)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    // ==================
+    // 경로 표시 함수
+    // ==================
+    private fun displayRecommendedRoute(map: KakaoMap, route: RecommendedRoute) {
+        activeRecommendedRoute = route
+
+        drawRecommendedPath(map, route.points)
+
+        // API에서 받은 실제 경로 거리 표시
+        view?.findViewById<TextView>(
+            R.id.tv_recommended_distance
+        )?.text = String.format(
+            Locale.KOREA,
+            "%.2f km",
+            route.distanceMeters / 1000.0
+        )
+
+        // API에서 받은 예상 소요 시간 표시
+        val totalMinutes = (route.durationSeconds + 59) / 60
+        val hours = totalMinutes / 60
+        val minutes = totalMinutes % 60
+
+        val timeText = if (hours > 0) {
+            "${hours}시간 ${minutes}분"
+        } else {
+            "${minutes}분"
+        }
+
+        view?.findViewById<TextView>(
+            R.id.tv_recommended_time
+        )?.text = timeText
+
+        view?.findViewById<TextView>(
+            R.id.tv_recommended_elevation
+        )?.text = "정보 없음"
+
+        drawRouteMarkers(map, route.points)
+    }
+
+    // =========================
+    // 중복 경로 판별 함수
+    // =========================
+    private fun routeSignature(points: List<LatLng>): String {
+        if (points.isEmpty()) return ""
+
+        // 경로 전체에서 시작·중간·끝 지점 등 최대 7개 지점을 비교
+        val sampleCount = minOf(7, points.size)
+
+        return (0 until sampleCount).joinToString("|") { index ->
+            val pointIndex = if (sampleCount == 1) {
+                0
+            } else {
+                index * (points.size - 1) / (sampleCount - 1)
+            }
+
+            val point = points[pointIndex]
+
+            "${"%.4f".format(java.util.Locale.US, point.latitude)}," +
+                    "${"%.4f".format(java.util.Locale.US, point.longitude)}"
+        }
+    }
+
+    // =========================
+    // 장소 검색 API 함수
+    // =========================
+    private data class PlaceResult(
+        val name: String,
+        val address: String,
+        val latitude: Double,
+        val longitude: Double
+    )
+
+    // =========================
+    // 카카오 로컬 API로 장소 검색
+    // =========================
+    private fun searchPlace(query: String): PlaceResult {
+        val apiKey = BuildConfig.KAKAO_REST_API_KEY
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+
+        val url = URL(
+            "https://dapi.kakao.com/v2/local/search/keyword.json" +
+                    "?query=$encodedQuery"
+        )
+
+        val connection = url.openConnection() as HttpURLConnection
+
+        try {
+            connection.requestMethod = "GET"
+            connection.setRequestProperty(
+                "Authorization",
+                "KakaoAK $apiKey"
+            )
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val statusCode = connection.responseCode
+
+            val stream = if (statusCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
+
+            val response = stream?.bufferedReader()?.use {
+                it.readText()
+            }.orEmpty()
+
+            if (statusCode !in 200..299) {
+                throw Exception("장소 검색 HTTP $statusCode: $response")
+            }
+
+            val documents = JSONObject(response)
+                .optJSONArray("documents")
+                ?: throw Exception("장소 검색 결과를 읽을 수 없습니다.")
+
+            if (documents.length() == 0) {
+                throw Exception("'$query' 검색 결과가 없습니다.")
+            }
+
+            // 첫 번째 검색 결과 사용
+            val place = documents.getJSONObject(0)
+
+            val longitude = place.getString("x").toDouble()
+            val latitude = place.getString("y").toDouble()
+
+            return PlaceResult(
+                name = place.optString("place_name", query),
+                address = place.optString("road_address_name")
+                    .ifBlank {
+                        place.optString("address_name")
+                    },
+                latitude = latitude,
+                longitude = longitude
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    // =========================
+    // 도보 경로 조회 결과
+    // =========================
+    private data class WalkingRouteResult(
+        val points: List<LatLng>,
+        val distanceMeters: Double,
+        val durationSeconds: Long
+    )
+
+    // =========================
+    // 도보 경로 응답 파싱
+    // =========================
+    private fun parseWalkingRoute(response: String): WalkingRouteResult {
+        val json = JSONObject(response)
+
+        val status = json.optString("status")
+        if (status != "OK") {
+            throw Exception("도보 경로 탐색 실패: $status")
+        }
+
+        val route = json.optJSONObject("route")
+            ?: throw Exception("응답에 route가 없습니다.")
+
+        val legs = route.optJSONArray("legs")
+            ?: throw Exception("응답에 legs가 없습니다.")
+
+        val points = mutableListOf<LatLng>()
+
+        for (i in 0 until legs.length()) {
+            val leg = legs.optJSONObject(i) ?: continue
+            val steps = leg.optJSONArray("steps") ?: continue
+
+            for (j in 0 until steps.length()) {
+                val step = steps.optJSONObject(j) ?: continue
+                val path = step.optJSONObject("path") ?: continue
+                val coordinates = path.optJSONArray("points") ?: continue
+
+                for (k in 0 until coordinates.length()) {
+                    val coordinate = coordinates.optJSONArray(k) ?: continue
+                    if (coordinate.length() < 2) continue
+
+                    val longitude = coordinate.optDouble(0, Double.NaN)
+                    val latitude = coordinate.optDouble(1, Double.NaN)
+
+                    if (
+                        longitude.isFinite() &&
+                        latitude.isFinite() &&
+                        longitude in -180.0..180.0 &&
+                        latitude in -90.0..90.0
+                    ) {
+                        val point = LatLng.from(latitude, longitude)
+
+                        if (points.lastOrNull() != point) {
+                            points.add(point)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (points.size < 2) {
+            throw Exception("경로 좌표가 충분하지 않습니다.")
+        }
+
+        // 경로 좌표 사이의 거리를 합산
+        var calculatedDistance = 0.0
+
+        for (i in 0 until points.lastIndex) {
+            val start = points[i]
+            val end = points[i + 1]
+
+            val distance = FloatArray(1)
+
+            Location.distanceBetween(
+                start.latitude,
+                start.longitude,
+                end.latitude,
+                end.longitude,
+                distance
+            )
+
+            calculatedDistance += distance[0]
+        }
+
+        // API 응답에 거리·시간이 있다면 우선 사용
+        val summary = route.optJSONObject("summary")
+
+        val apiDistance = summary
+            ?.optDouble("distance", Double.NaN)
+            ?.takeIf { it.isFinite() && it > 0.0 }
+
+        val apiDuration = summary
+            ?.optDouble("duration", Double.NaN)
+            ?.takeIf { it.isFinite() && it > 0.0 }
+
+        val distanceMeters = apiDistance ?: calculatedDistance
+
+        // API 소요 시간이 없으면 평균 도보 속도 5km/h로 추정
+        val durationSeconds = apiDuration?.toLong()
+            ?: (distanceMeters / 5000.0 * 3600.0).toLong()
+
+        Log.d("WALK_API", "경로 거리=${distanceMeters}m, 예상 시간=${durationSeconds}초")
+
+        return WalkingRouteResult(
+            points = points,
+            distanceMeters = distanceMeters,
+            durationSeconds = durationSeconds
+        )
+    }
+
+    // =========================
+    // 추천 경로 지도 표시
+    // =========================
+    private fun drawRecommendedPath(map: KakaoMap, points: List<LatLng>) {
+        if (points.size < 2) return
+
+        val layer = map.shapeManager?.getLayer()
+            ?: throw Exception("지도 ShapeLayer를 가져올 수 없습니다.")
+
+        // 이전 추천 경로와 마커만 제거
+        recommendedPolyline?.remove()
+        routeStartLabel?.remove()
+        routeEndLabel?.remove()
+
+        // 추천 경로 그리기
+        val mapPoints = MapPoints.fromLatLng(points)
+
+        val options = PolylineOptions.from(
+            mapPoints,
+            10f,
+            Color.RED
+        )
+
+        recommendedPolyline = layer.addPolyline(options)
+
+        // 출발점·도착점 마커 생성
+        routeStartLabel = createRouteMarker(
+            map = map,
+            id = "recommended_route_start",
+            position = points.first(),
+            color = Color.rgb(46, 160, 67)
+        )
+
+        routeEndLabel = createRouteMarker(
+            map = map,
+            id = "recommended_route_end",
+            position = points.last(),
+            color = Color.RED
+        )
+
+        // 실제 좌표 사이의 거리를 합산
+        var totalDistanceMeters = 0.0
+
+        for (i in 0 until points.size - 1) {
+            val start = points[i]
+            val end = points[i + 1]
+
+            val results = FloatArray(1)
+
+            Location.distanceBetween(
+                start.latitude,
+                start.longitude,
+                end.latitude,
+                end.longitude,
+                results
+            )
+
+            totalDistanceMeters += results[0]
+        }
+
+        // 거리 표시
+        val distanceKm = totalDistanceMeters / 1000.0
+
+        view?.findViewById<TextView>(
+            R.id.tv_recommended_distance
+        )?.text = String.format(
+            Locale.KOREA,
+            "%.2f km",
+            distanceKm
+        )
+
+        // 예상 러닝 시간: 평균 페이스 6분/km 기준
+        val estimatedSeconds = (distanceKm * 6 * 60).toInt()
+        val estimatedMinutes = estimatedSeconds / 60
+        val remainingSeconds = estimatedSeconds % 60
+
+        val estimatedTimeText = if (estimatedMinutes >= 60) {
+            String.format(
+                Locale.KOREA,
+                "%d시간 %d분",
+                estimatedMinutes / 60,
+                estimatedMinutes % 60
+            )
+        } else if (remainingSeconds == 0) {
+            "${estimatedMinutes}분"
+        } else {
+            "${estimatedMinutes}분 ${remainingSeconds}초"
+        }
+
+        view?.findViewById<TextView>(
+            R.id.tv_recommended_time
+        )?.text = estimatedTimeText
+
+        // 추천 경로 전체가 화면에 들어오도록 카메라 조정
+//        map.moveCamera(
+//            CameraUpdateFactory.newCenterPosition(points.first())
+//        )
+
+        // 추천 경로 전체가 화면에 들어오도록 카메라 조정
+        map.moveCamera(
+            CameraUpdateFactory.fitMapPoints(
+                points.toTypedArray(),
+                100,
+                15
+            )
+        )
+        Log.d(
+            "WALK_API",
+            "추천 경로 표시 완료: 좌표 ${points.size}개, " +
+                    "거리 ${"%.2f".format(Locale.KOREA, distanceKm)}km, " +
+                    "예상 시간 $estimatedTimeText"
+        )
+    }
+
+    // =========================
+    // 출발지·도착지 마커 표시
+    // =========================
+    private fun drawRouteMarkers(map: KakaoMap, points: List<LatLng>) {
+        val labelManager = map.labelManager ?: return
+        val layer = labelManager.getLayer() ?: return
+
+        // 이전 검색 마커 제거
+        routeStartLabel?.remove()
+        routeEndLabel?.remove()
+
+        val startPosition = routeStartLatLng ?: points.first()
+        val endPosition = routeEndLatLng ?: points.last()
+
+        routeStartLabel = layer.addLabel(
+            LabelOptions.from(
+                "route_start",
+                startPosition
+            ).setStyles(createRouteMarkerBitmap("S", Color.rgb(46, 160, 67)))
+        )
+
+        routeEndLabel = layer.addLabel(
+            LabelOptions.from(
+                "route_end",
+                endPosition
+            ).setStyles(createRouteMarkerBitmap("E", Color.RED))
+        )
+        Log.d("ROUTE_MARKER", "출발지 마커=$startPosition, 도착지 마커=$endPosition")
+    }
+
+    // =========================
+    // S/E 문자 마커 이미지 생성
+    // =========================
+    private fun createRouteMarkerBitmap(text: String, backgroundColor: Int): Bitmap {
+        val size = 80
+        val bitmap = Bitmap.createBitmap(
+            size,
+            size,
+            Bitmap.Config.ARGB_8888
+        )
+
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        // 흰색 테두리
+        paint.style = Paint.Style.FILL
+        paint.color = Color.WHITE
+        canvas.drawCircle(
+            size / 2f,
+            size / 2f,
+            30f,
+            paint
+        )
+
+        // 내부 색상
+        paint.color = backgroundColor
+        canvas.drawCircle(
+            size / 2f,
+            size / 2f,
+            25f,
+            paint
+        )
+
+        // S / E 문자
+        paint.color = Color.WHITE
+        paint.textSize = 28f
+        paint.textAlign = Paint.Align.CENTER
+        paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
+
+        val textY = size / 2f -
+                (paint.ascent() + paint.descent()) / 2f
+
+        canvas.drawText(
+            text,
+            size / 2f,
+            textY,
+            paint
+        )
+        return bitmap
+    }
+
+    // =========================
+    // 출발점·도착점 마커 생성 함수
+    // =========================
+    private fun createRouteMarker(
+        map: KakaoMap,
+        id: String,
+        position: LatLng,
+        color: Int
+    ): Label? {
+        val labelManager = map.labelManager ?: return null
+        val layer = labelManager.getLayer() ?: return null
+
+        val size = 60
+        val bitmap = Bitmap.createBitmap(
+            size,
+            size,
+            Bitmap.Config.ARGB_8888
+        )
+
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        // 흰색 테두리
+        paint.color = Color.WHITE
+        paint.style = Paint.Style.FILL
+        canvas.drawCircle(
+            size / 2f,
+            size / 2f,
+            22f,
+            paint
+        )
+
+        // 출발점 또는 도착점 색상
+        paint.color = color
+        canvas.drawCircle(
+            size / 2f,
+            size / 2f,
+            16f,
+            paint
+        )
+        val options = LabelOptions
+            .from(id, position)
+            .setStyles(bitmap)
+
+        return layer.addLabel(options)
+    }
+
     // =========================
     // Bottom Sheet 초기화
     // =========================
@@ -293,11 +1032,84 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         }
 
         view.findViewById<Button>(R.id.btn_other_route).setOnClickListener {
-            Toast.makeText(
-                requireContext(),
-                "추천 경로 기능은 다음 단계에서 연결할게요.",
-                Toast.LENGTH_SHORT
-            ).show()
+            showNextRecommendedRoute()
+        }
+
+        view.findViewById<Button>(R.id.btn_search_route).setOnClickListener {
+            if (isRunning) {
+                Toast.makeText(requireContext(), "러닝 중에는 경로를 변경할 수 없어요.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            val startQuery = view.findViewById<EditText>(
+                R.id.et_route_start
+            ).text.toString().trim()
+
+            val endQuery = view.findViewById<EditText>(
+                R.id.et_route_end
+            ).text.toString().trim()
+
+            if (startQuery.isBlank() || endQuery.isBlank()) {
+                Toast.makeText(requireContext(), "출발지와 도착지를 모두 입력해 주세요.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            if (isRouteRequesting) return@setOnClickListener
+
+            isRouteRequesting = true
+
+            viewLifecycleOwner.lifecycleScope.launch {
+                try {
+                    val places = withContext(Dispatchers.IO) {
+                        val startPlace = searchPlace(startQuery)
+                        val endPlace = searchPlace(endQuery)
+
+                        Pair(startPlace, endPlace)
+                    }
+
+                    val startPlace = places.first
+                    val endPlace = places.second
+
+                    // 검색한 장소의 좌표 저장
+                    routeStartLatLng = LatLng.from(
+                        startPlace.latitude,
+                        startPlace.longitude
+                    )
+                    routeEndLatLng = LatLng.from(
+                        endPlace.latitude,
+                        endPlace.longitude
+                    )
+
+                    routeStartName = startPlace.name
+                    routeEndName = endPlace.name
+
+                    // 장소 검색 완료 후 요청 상태 해제
+                    isRouteRequesting = false
+
+                    // 검색한 출발지와 도착지로 도보 경로 요청
+                    requestWalkingRoute(
+                        routeStartLatLng!!,
+                        routeEndLatLng!!
+                    )
+
+                    Log.d(
+                        "PLACE_SEARCH",
+                        "출발지: ${startPlace.name}, ${startPlace.address}, " +
+                                "${startPlace.latitude}, ${startPlace.longitude}"
+                    )
+                    Log.d(
+                        "PLACE_SEARCH",
+                        "도착지: ${endPlace.name}, ${endPlace.address}, " +
+                                "${endPlace.latitude}, ${endPlace.longitude}"
+                    )
+//                    Toast.makeText(requireContext(), "장소 검색 성공!\n${startPlace.name} → ${endPlace.name}", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    Log.e("PLACE_SEARCH", "장소 검색 실패", e)
+                    Toast.makeText(requireContext(), "장소 검색 실패: ${e.message ?: "알 수 없는 오류"}", Toast.LENGTH_LONG).show()
+                } finally {
+                    isRouteRequesting = false
+                }
+            }
         }
 
         startRunningButton.setOnClickListener {
@@ -306,17 +1118,62 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
 
         pauseRunningButton.setOnClickListener {
             if (isRunning) {
-                isPaused = !isPaused
+                val currentTime = SystemClock.elapsedRealtime()
+
+                if (!isPaused) {
+                    // 현재 시간부터 수동 일시정지
+                    updateElapsedTime()
+
+                    // 자동 정지 상태였다면 자동 정지 구간을 마감
+                    if (isAutoPaused) {
+                        autoPausedDurationMillis += (
+                                currentTime - autoPauseStartedElapsedRealtime
+                                ).coerceAtLeast(0L)
+
+                        isAutoPaused = false
+                        autoPauseStartedElapsedRealtime = 0L
+                    }
+
+                    pauseStartedElapsedRealtime = currentTime
+                    isPaused = true
+                } else {
+                    // 수동 일시정지 종료
+                    pausedDurationMillis += (
+                            currentTime - pauseStartedElapsedRealtime
+                            ).coerceAtLeast(0L)
+
+                    pauseStartedElapsedRealtime = 0L
+                    isPaused = false
+
+                    // 재개 후 새 GPS 움직임을 기다리도록 초기화
+                    lastMovementElapsedRealtime = currentTime
+                }
+
+                // GPS 위치 간 거리 오차 방지
                 previousLocation = null
                 lastLocationTime = 0L
                 isMoving = false
-                pauseRunningButton.text = if (isPaused) "러닝 재개" else "일시정지"
-                view.findViewById<TextView>(R.id.tv_running_active_title).text =
-                    if (isPaused) "일시정지 중" else "러닝 중"
+
+                pauseRunningButton.text =
+                    if (isPaused) "러닝 재개" else "일시정지"
+
+                view.findViewById<TextView>(
+                    R.id.tv_running_active_title
+                ).text = if (isPaused) {
+                    "일시정지 중"
+                } else {
+                    "러닝 중"
+                }
+
+                updateElapsedTime()
                 updateRunningStats()
-                Toast.makeText(
-                    requireContext(),
-                    if (isPaused) "러닝을 일시정지했어요." else "러닝을 재개했어요.",
+
+                Toast.makeText(requireContext(),
+                    if (isPaused) {
+                        "러닝을 일시정지했어요."
+                    } else {
+                        "러닝을 재개했어요."
+                    },
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -371,12 +1228,52 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     private fun startRunning(view: View) {
         if (isRunning) return
 
+        // 추천 경로 모드라면 현재 선택한 경로를 보관
+        activeRecommendedRoute = if (isRecommendedMode) {
+            recommendedRoutes.getOrNull(selectedRouteIndex)
+        } else {
+            null
+        }
+
+        // 추천 경로 모드인데 아직 경로를 조회하지 않았다면 안내
+        if (isRecommendedMode && activeRecommendedRoute == null) {
+            Toast.makeText(requireContext(), "먼저 추천 경로를 조회해 주세요.", Toast.LENGTH_LONG).show()
+            return
+        }
+
         isRunning = true
-        runningStartedAt = System.currentTimeMillis()   // 러닝을 시작한 날짜와 시각 기록
+
+        // 날짜 및 시각 기록
+        runningStartedAt = System.currentTimeMillis()
+
+        // 실제 경과 시간 측정 시작
+        runningStartedElapsedRealtime = SystemClock.elapsedRealtime()
+
         isPaused = false
+        pausedDurationMillis = 0L
+        pauseStartedElapsedRealtime = 0L
+
         totalDistance = 0.0
         hasShownTargetDistanceNotice = false
+
+        // 시간 초기화
         elapsedTime = 0L
+
+        // 자동 일시정지 상태 초기화
+        isAutoPaused = false
+        autoPauseStartedElapsedRealtime = 0L
+        autoPausedDurationMillis = 0L
+
+        // 이동 감지 기준 초기화
+        movementAnchorLocation = null
+        lastReliableGpsElapsedRealtime = 0L
+
+//        // 러닝 시작 시점부터 움직임 감지 대기
+//        lastMovementElapsedRealtime = runningStartedElapsedRealtime
+
+        // 첫 GPS 이동 판정이 이루어질 때까지 자동 정지 유예
+        lastMovementElapsedRealtime = SystemClock.elapsedRealtime()
+
         lastLocationTime = 0L
         isMoving = false
         previousLocation = null
@@ -401,20 +1298,26 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         updateRunningStats()
         startTimer()
 
-        Log.d("RUNNING", "러닝 시작 / 모드: ${if (isRecommendedMode) "추천 경로" else "내 맘대로"} / 목표: ${targetDistanceKm ?: "제한 없음"}")
+        Log.d(
+            "RUNNING",
+            "러닝 시작 / 모드: ${if (isRecommendedMode) "추천 경로" else "내 맘대로"} / " +
+                    "선택 경로: ${activeRecommendedRoute?.mode ?: "없음"} / " +
+                    "경로 좌표 수: ${activeRecommendedRoute?.points?.size ?: 0} / " +
+                    "목표: ${targetDistanceKm ?: "제한 없음"}"
+        )
     }
 
     private fun finishRunning() {
+        // 종료 버튼을 누른 순간까지 전체 시간 갱신
+        updateElapsedTime()
+
         isRunning = false
         isPaused = false
         stopTimer()
 
         Log.d("RUNNING", "러닝 종료! 최종 거리: ${totalDistance}m")
-
         Log.d("RUNNING_PATH", "종료 시 좌표 개수: ${runningPath.size}")
-
         Log.d("RUNNING_PATH", "시작 좌표: ${runningPath.firstOrNull()}")
-
         Log.d("RUNNING_PATH", "마지막 좌표: ${runningPath.lastOrNull()}")
 
         // 결과 화면으로 전달할 데이터
@@ -462,7 +1365,7 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                     elapsedTimeMillis = time,
                     elevationGainMeters = elevation,
                     routeCoordinatesJson = routeCoordinatesJson,
-                    title = title
+                    title = title,
                 )
 
                 val dao = RunningDatabase
@@ -512,6 +1415,67 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         bottomSheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
     }
 
+    // =========================
+    // 자동 정지 시간을 제외한 러닝 시간 계산
+    // =========================
+    private fun updateElapsedTime() {
+        if (!isRunning) return
+
+        val currentTime = SystemClock.elapsedRealtime()
+
+        // 수동 일시정지 시간
+        val currentManualPauseDuration = if (isPaused) {
+            (currentTime - pauseStartedElapsedRealtime).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+
+        // 자동 일시정지 시간
+        val currentAutoPauseDuration = if (isAutoPaused) {
+            (currentTime - autoPauseStartedElapsedRealtime).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+
+        elapsedTime = (
+                currentTime -
+                        runningStartedElapsedRealtime -
+                        pausedDurationMillis -
+                        currentManualPauseDuration -
+                        autoPausedDurationMillis -
+                        currentAutoPauseDuration
+                ).coerceAtLeast(0L)
+    }
+
+    // =========================
+    // GPS 움직임이 없으면 3초 후 자동 정지
+    // =========================
+    private fun checkAutoPause() {
+        if (!isRunning || isPaused || isAutoPaused) return
+
+        val currentTime = SystemClock.elapsedRealtime()
+
+        // 최근 GPS 신호가 불안정하다면 실제 정지로 판단하지 않음
+        // GPS가 끊긴 상황에서 잘못된 자동 정지가 발생하는 것을 방지
+        if (
+            lastReliableGpsElapsedRealtime == 0L ||
+            currentTime - lastReliableGpsElapsedRealtime > 4000L
+        ) {
+            return
+        }
+
+        // 마지막으로 움직임을 감지한 시점부터 3초가 지났는지 확인
+        if (
+            currentTime - lastMovementElapsedRealtime >=
+            AUTO_PAUSE_DELAY_MILLIS
+        ) {
+            autoPauseStartedElapsedRealtime =
+                lastMovementElapsedRealtime + AUTO_PAUSE_DELAY_MILLIS
+            isAutoPaused = true
+            Log.d("RUN_TIMER", "GPS 이동 없음 → 자동 일시정지")
+        }
+    }
+
     private fun updateRunningStats() {
         if (!::runningDistanceText.isInitialized) return
 
@@ -544,19 +1508,19 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // 타이머 시작 함수
     // =========================
     private fun startTimer() {
-        timerRunnable = object  : Runnable {
+        timerRunnable = object : Runnable {
             override fun run() {
-                // 현재까지 누적된 실제 이동 시간 표시
-                val totalSeconds = elapsedTime / 1000
+                if (!isRunning) return
 
-                val hours = totalSeconds / 3600
-                val minutes = (totalSeconds % 3600) / 60
-                val seconds = totalSeconds % 60
-                Log.d("RUN_TIMER", String.format("%02d:%02d:%02d", hours, minutes, seconds))
+                // 자동 정지 여부 먼저 확인
+                checkAutoPause()
+
+                // 자동 정지 시간을 제외한 러닝 시간 갱신
+                updateElapsedTime()
+
                 updateRunningStats()
 
-                // 1초 후 다시 실행
-                timerHandler.postDelayed(this, 1000)
+                timerHandler.postDelayed(this, 1000L)
             }
         }
         timerHandler.post(timerRunnable)
@@ -668,57 +1632,163 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                         // 러닝 중 GPS 경로 저장 + 이동 시간 계산
                         // =================================
                         if (isRunning && !isPaused) {
-                            // 현재 GPS가 들어온 시간
-                            val currentLocationTime = location.elapsedRealtimeNanos / 1_000_000L
 
-                            // 이전 GPS 위치가 있는 경우
-                            if (previousLocation != null) {
-                                // 이전 GPS -> 현재 GPS 거리
-                                val distance = previousLocation !!.distanceTo(location)
+                            // 현재 GPS 좌표의 측정 시각
+                            val currentLocationTime =
+                                location.elapsedRealtimeNanos / 1_000_000L
 
-                                // 1m 이상 이동했으면 움직이는 중
-                                isMoving = distance >= 1.0f
+                            if (previousLocation != null && lastLocationTime != 0L) {
 
-                                // 이전 GPS 시간도 존재한다면
-                                if (lastLocationTime != 0L) {
-                                    // 이전 GPS -> 현재 GPS 사이의 시간 (현재시간 - 이전시간)
-                                    val deltaTime = currentLocationTime - lastLocationTime
+                                val deltaTime = currentLocationTime - lastLocationTime
+                                val distance = previousLocation!!.distanceTo(location)
+                                val currentElapsedTime = SystemClock.elapsedRealtime()
 
-                                    // 움직이고 있을 때만 시간 누적
-                                    if (isMoving && deltaTime > 0L) {
-                                        elapsedTime += deltaTime
-                                        Log.d("RUN_TIMER", "이동 시간 추가 : ${deltaTime}ms / " + "총 이동 시간 : ${elapsedTime}ms")
-                                    }
+                                // GPS 정확도가 적절한 경우에만 이동 판정에 사용
+                                val isAccurateLocation = location.accuracy <= 30f
+
+                                if (isAccurateLocation) {
+                                    lastReliableGpsElapsedRealtime = currentElapsedTime
                                 }
+
+                                // 기준 위치에서 누적된 이동 거리로 판단
+                                if (isAccurateLocation && deltaTime in 1L..5000L) {
+                                    if (movementAnchorLocation == null) {
+                                        movementAnchorLocation = location
+                                    }
+
+                                    val anchor = movementAnchorLocation
+                                    if (anchor != null) {
+                                        val anchorDistance = anchor.distanceTo(location)
+                                        val anchorElapsedTime =
+                                            (location.elapsedRealtimeNanos / 1_000_000L) -
+                                                    (anchor.elapsedRealtimeNanos / 1_000_000L)
+
+                                        val anchorSpeed = if (anchorElapsedTime > 0L) {
+                                            anchorDistance / (anchorElapsedTime / 1000.0)
+                                        } else {
+                                            0.0
+                                        }
+
+                                        // 작은 GPS 이동량이 누적되어 실제 이동이 확인되면 재개
+                                        val movementDetected =
+                                            anchorDistance >= 1.5f &&
+                                                    anchorElapsedTime > 0L
+
+                                        if (movementDetected) {
+                                            isMoving = true
+                                            lastMovementElapsedRealtime = currentElapsedTime
+                                            movementAnchorLocation = location
+
+                                            if (isAutoPaused) {
+                                                autoPausedDurationMillis +=
+                                                    (currentElapsedTime - autoPauseStartedElapsedRealtime)
+                                                        .coerceAtLeast(0L)
+
+                                                isAutoPaused = false
+                                                autoPauseStartedElapsedRealtime = 0L
+
+                                                Log.d("RUN_TIMER", "GPS 움직임 감지 → 자동 재개")
+                                            }
+                                        } else {
+                                            isMoving = false
+                                        }
+                                    }
+                                } else {
+                                    // GPS 정확도가 낮거나 측정 간격이 유효하지 않으면
+                                    // 기존 이동 시각을 갱신하지 않고 정지 판정도 보류
+                                    isMoving = false
+                                }
+
+                                Log.d(
+                                    "RUN_TIMER",
+                                    "거리=${distance}m, 기준점 누적 이동=${movementAnchorLocation?.let { it.distanceTo(location) }}m, " +
+                                            "이동=$isMoving, 자동정지=$isAutoPaused, 정확도=${location.accuracy}m"
+                                )
+
+//                                // 이전 GPS와 현재 GPS 사이의 시간
+//                                val deltaTime = currentLocationTime - lastLocationTime
+//
+//                                // 이전 GPS와 현재 GPS 사이의 거리
+//                                val distance = previousLocation!!.distanceTo(location)
+//
+//                                // GPS 위치 정확도가 너무 낮은 경우 이동 시간 계산에서 제외
+////                                val isAccurateLocation = location.accuracy <= 20f
+//                                val isAccurateLocation = location.accuracy <= 30f
+//
+//                                // GPS 간격이 지나치게 긴 경우 시간 과대 계산 방지
+////                                val isValidInterval = deltaTime in 1L..3000L
+//                                val isValidInterval = deltaTime in 1L..5000L
+//
+//                                // GPS 간격으로 계산한 추정 속도 (m/s)
+//                                val estimatedSpeed = if (deltaTime > 0L) {
+//                                    distance / (deltaTime / 1000.0)
+//                                } else {
+//                                    0.0
+//                                }
+//
+//                                // GPS 기준으로 실제 움직임 여부 판단
+////                                isMoving =
+////                                    isAccurateLocation &&
+////                                            isValidInterval &&
+////                                            distance >= 1.5f &&
+////                                            estimatedSpeed >= 0.6
+//
+//                                isMoving = isAccurateLocation &&
+//                                        isValidInterval &&
+//                                        distance >= 0.8f &&
+//                                        estimatedSpeed >= 0.3
+//
+//                                if (isMoving) {
+//                                    // 움직임이 확인된 시각 갱신
+//                                    lastMovementElapsedRealtime =
+//                                        SystemClock.elapsedRealtime()
+//
+//                                    // 자동 정지 상태였다면 재개
+//                                    if (isAutoPaused) {
+//                                        val currentTime = SystemClock.elapsedRealtime()
+//
+//                                        autoPausedDurationMillis += (
+//                                                currentTime - autoPauseStartedElapsedRealtime
+//                                                ).coerceAtLeast(0L)
+//
+//                                        isAutoPaused = false
+//                                        autoPauseStartedElapsedRealtime = 0L
+//
+//                                        Log.d("RUN_TIMER", "GPS 움직임 감지 → 자동 재개")
+//                                    }
+//                                }
+//                                Log.d("RUN_TIMER", "GPS 거리=${distance}m, " + "추정 속도=${"%.2f".format(estimatedSpeed)}m/s, " + "이동 상태=$isMoving, 자동 정지=$isAutoPaused")
+                            } else {
+                                isMoving = false
                             }
-                            // 현재 GPS 시간을 다음 GPS의 이전 시간으로 저장
+
+                            // 다음 GPS 비교를 위해 현재 시각 저장
                             lastLocationTime = currentLocationTime
 
                             // GPS 경로 저장
                             runningPath.add(currentPosition)
-                            Log.d("RUNNING_PATH", "경로 저장 : ${currentPosition.latitude}, " + "${currentPosition.longitude}")
 
-                            // 현재까지 저장된 GPS 경로를 지도에 선으로 표시
+                            Log.d("RUNNING_PATH", "경로 저장: ${currentPosition.latitude}, " + "${currentPosition.longitude}")
+
+                            // 지도에 러닝 경로 표시
                             drawRunningPath(kakaoMap)
                         }
 
-                        // 현재 위치로 지도 이동
-                        kakaoMap.moveCamera(
-                            CameraUpdateFactory.newCenterPosition(currentPosition)
-                        )
+                        // 카메라가 현위치를 따라가도록 설정된 경우에만 이동
+                        if (isCameraFollowingCurrentLocation) {
+                            kakaoMap.moveCamera(
+                                CameraUpdateFactory.newCenterPosition(currentPosition)
+                            )
+                        }
 
-                        // 🔵 현재 위치 표시
-                        if (
-                            currentLocationLabel == null
-                        ) {
+                        // 현위치 마커는 계속 갱신
+                        if (currentLocationLabel == null) {
                             // 최초 위치 → 마커 생성
                             createCurrentLocationMarker(kakaoMap, currentPosition)
-
                         } else {
                             // 이후 위치 → 기존 마커 이동
                             currentLocationLabel?.moveTo(currentPosition)
                         }
-
                         // 이전 위치와 현재 위치 확인
                         Log.d("GPS_COMPARE", "이전 위치: " + "${previousLocation?.latitude}, " + "${previousLocation?.longitude} / " + "현재 위치: " + "${location.latitude}, " + "${location.longitude}")
 
