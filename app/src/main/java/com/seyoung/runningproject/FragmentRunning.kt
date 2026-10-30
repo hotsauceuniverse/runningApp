@@ -19,12 +19,12 @@ import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import android.widget.EditText
-import android.os.SystemClock
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import androidx.core.app.ActivityCompat
 import androidx.fragment.app.Fragment
 import androidx.core.view.doOnLayout
 import androidx.lifecycle.lifecycleScope
+import android.os.SystemClock
 
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -119,17 +119,11 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // 시작부터 종료까지, 직접 일시정지한 시간만 제외
     private var elapsedTime = 0L
 
+    // 러닝 시간 측정 기준 (단조 증가 시계)
+    private var runningTimeStartedAt = 0L
+
     // 러닝 시작 시각 (날짜 및 시각 저장용)
     private var runningStartedAt = 0L
-
-    // 러닝 시작 이후 경과 시간 측정용
-    private var runningStartedElapsedRealtime = 0L
-
-    // 직접 일시정지한 시간의 누적값
-    private var pausedDurationMillis = 0L
-
-    // 현재 일시정지를 시작한 시각
-    private var pauseStartedElapsedRealtime = 0L
 
     // 마지막 GPS 위치가 들어온 시간
     private var lastLocationTime = 0L
@@ -137,32 +131,20 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // 현재 사용자가 움직이고 있는지
     private var isMoving = false
 
-    // GPS 자동 일시정지 상태
-    private var isAutoPaused = false
+    // 연속으로 정지 신호가 감지된 횟수
+    private var consecutiveStoppedSamples = 0
 
-    // 마지막으로 움직임이 확인된 시각
-    private var lastMovementElapsedRealtime = 0L
-
-    // 자동 일시정지가 시작된 시각
-    private var autoPauseStartedElapsedRealtime = 0L
-
-    // 자동 일시정지 시간 누적
-    private var autoPausedDurationMillis = 0L
-
-    // 움직임이 없을 때 자동 정지까지 기다릴 시간: 3초
-    private val AUTO_PAUSE_DELAY_MILLIS = 3000L
-
-    // 이동 여부를 판단하기 위한 기준 GPS 위치
-    private var movementAnchorLocation: Location? = null
-
-    // 신뢰할 수 있는 GPS가 마지막으로 들어온 시각
-    private var lastReliableGpsElapsedRealtime = 0L
+    // 마지막으로 지도 경로에 저장한 위치
+    private var lastPathLocation: Location? = null
 
     // 1초마다 화면/로그 확인
     private var timerHandler = Handler(Looper.getMainLooper())
 
     // 1초마다 실행할 코드
     private lateinit var timerRunnable: Runnable
+
+    // 거리 계산용 위치
+    private var previousDistanceLocation: Location? = null
 
     // Bottom Sheet 및 화면 요소
     private lateinit var bottomSheet: View
@@ -1118,36 +1100,31 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
 
         pauseRunningButton.setOnClickListener {
             if (isRunning) {
-                val currentTime = SystemClock.elapsedRealtime()
-
+//                if (!isPaused) {
+//                    // 수동 일시정지
+//                    isPaused = true
+//                } else {
+//                    // 러닝 재개
+//                    isPaused = false
+//                }
                 if (!isPaused) {
-                    // 현재 시간부터 수동 일시정지
-                    updateElapsedTime()
-
-                    // 자동 정지 상태였다면 자동 정지 구간을 마감
-                    if (isAutoPaused) {
-                        autoPausedDurationMillis += (
-                                currentTime - autoPauseStartedElapsedRealtime
-                                ).coerceAtLeast(0L)
-
-                        isAutoPaused = false
-                        autoPauseStartedElapsedRealtime = 0L
-                    }
-
-                    pauseStartedElapsedRealtime = currentTime
+                    // 일시정지: 현재까지 누적된 이동 시간 유지
                     isPaused = true
                 } else {
-                    // 수동 일시정지 종료
-                    pausedDurationMillis += (
-                            currentTime - pauseStartedElapsedRealtime
-                            ).coerceAtLeast(0L)
-
-                    pauseStartedElapsedRealtime = 0L
+                    // 재개: 기존 이동 시간부터 이어서 누적
                     isPaused = false
-
-                    // 재개 후 새 GPS 움직임을 기다리도록 초기화
-                    lastMovementElapsedRealtime = currentTime
                 }
+
+                // GPS 위치 간 거리 오차 방지
+                previousLocation = null
+                lastLocationTime = 0L
+                isMoving = false
+                consecutiveStoppedSamples = 0
+
+                pauseRunningButton.text =
+                    if (isPaused) "러닝 재개" else "일시정지"
+
+                updateRunningStats()
 
                 // GPS 위치 간 거리 오차 방지
                 previousLocation = null
@@ -1165,10 +1142,10 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                     "러닝 중"
                 }
 
-                updateElapsedTime()
                 updateRunningStats()
 
-                Toast.makeText(requireContext(),
+                Toast.makeText(
+                    requireContext(),
                     if (isPaused) {
                         "러닝을 일시정지했어요."
                     } else {
@@ -1246,42 +1223,26 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         // 날짜 및 시각 기록
         runningStartedAt = System.currentTimeMillis()
 
-        // 실제 경과 시간 측정 시작
-        runningStartedElapsedRealtime = SystemClock.elapsedRealtime()
-
         isPaused = false
-        pausedDurationMillis = 0L
-        pauseStartedElapsedRealtime = 0L
 
         totalDistance = 0.0
         hasShownTargetDistanceNotice = false
 
         // 시간 초기화
         elapsedTime = 0L
-
-        // 자동 일시정지 상태 초기화
-        isAutoPaused = false
-        autoPauseStartedElapsedRealtime = 0L
-        autoPausedDurationMillis = 0L
-
-        // 이동 감지 기준 초기화
-        movementAnchorLocation = null
-        lastReliableGpsElapsedRealtime = 0L
-
-//        // 러닝 시작 시점부터 움직임 감지 대기
-//        lastMovementElapsedRealtime = runningStartedElapsedRealtime
-
-        // 첫 GPS 이동 판정이 이루어질 때까지 자동 정지 유예
-        lastMovementElapsedRealtime = SystemClock.elapsedRealtime()
-
         lastLocationTime = 0L
         isMoving = false
+        consecutiveStoppedSamples = 0
         previousLocation = null
         runningPath.clear()
+
         runningPolyline?.remove()
         runningPolyline = null
         totalElevationGain = 0.0
         previousAltitude = null
+
+        lastPathLocation = null
+        previousDistanceLocation = null
 
         modeSelector.visibility = View.GONE
         view.findViewById<TextView>(R.id.tv_running_title).visibility = View.GONE
@@ -1308,9 +1269,6 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     }
 
     private fun finishRunning() {
-        // 종료 버튼을 누른 순간까지 전체 시간 갱신
-        updateElapsedTime()
-
         isRunning = false
         isPaused = false
         stopTimer()
@@ -1323,6 +1281,14 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         // 결과 화면으로 전달할 데이터
         val distance = totalDistance
         val time = elapsedTime
+
+        Log.d(
+            "RUN_SPEED_CHECK",
+            "종료 시 거리=${distance}m, " +
+                    "시간=${time}ms, " +
+                    "평균속도=${if (time > 0L) distance / 1000.0 / (time / 3600000.0) else 0.0}km/h"
+        )
+
         val elevation = totalElevationGain
         val startedAt = runningStartedAt
 
@@ -1415,67 +1381,6 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
         bottomSheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED
     }
 
-    // =========================
-    // 자동 정지 시간을 제외한 러닝 시간 계산
-    // =========================
-    private fun updateElapsedTime() {
-        if (!isRunning) return
-
-        val currentTime = SystemClock.elapsedRealtime()
-
-        // 수동 일시정지 시간
-        val currentManualPauseDuration = if (isPaused) {
-            (currentTime - pauseStartedElapsedRealtime).coerceAtLeast(0L)
-        } else {
-            0L
-        }
-
-        // 자동 일시정지 시간
-        val currentAutoPauseDuration = if (isAutoPaused) {
-            (currentTime - autoPauseStartedElapsedRealtime).coerceAtLeast(0L)
-        } else {
-            0L
-        }
-
-        elapsedTime = (
-                currentTime -
-                        runningStartedElapsedRealtime -
-                        pausedDurationMillis -
-                        currentManualPauseDuration -
-                        autoPausedDurationMillis -
-                        currentAutoPauseDuration
-                ).coerceAtLeast(0L)
-    }
-
-    // =========================
-    // GPS 움직임이 없으면 3초 후 자동 정지
-    // =========================
-    private fun checkAutoPause() {
-        if (!isRunning || isPaused || isAutoPaused) return
-
-        val currentTime = SystemClock.elapsedRealtime()
-
-        // 최근 GPS 신호가 불안정하다면 실제 정지로 판단하지 않음
-        // GPS가 끊긴 상황에서 잘못된 자동 정지가 발생하는 것을 방지
-        if (
-            lastReliableGpsElapsedRealtime == 0L ||
-            currentTime - lastReliableGpsElapsedRealtime > 4000L
-        ) {
-            return
-        }
-
-        // 마지막으로 움직임을 감지한 시점부터 3초가 지났는지 확인
-        if (
-            currentTime - lastMovementElapsedRealtime >=
-            AUTO_PAUSE_DELAY_MILLIS
-        ) {
-            autoPauseStartedElapsedRealtime =
-                lastMovementElapsedRealtime + AUTO_PAUSE_DELAY_MILLIS
-            isAutoPaused = true
-            Log.d("RUN_TIMER", "GPS 이동 없음 → 자동 일시정지")
-        }
-    }
-
     private fun updateRunningStats() {
         if (!::runningDistanceText.isInitialized) return
 
@@ -1507,23 +1412,39 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
     // =========================
     // 타이머 시작 함수
     // =========================
+//    private fun startTimer() {
+//        timerRunnable = object : Runnable {
+//            override fun run() {
+//                if (!isRunning) return
+//
+//                updateRunningStats()
+//
+//                timerHandler.postDelayed(this, 1000L)
+//            }
+//        }
+//        timerHandler.post(timerRunnable)
+//    }
+
     private fun startTimer() {
+        timerHandler.removeCallbacks(timerRunnableOrEmpty())
+
         timerRunnable = object : Runnable {
             override fun run() {
                 if (!isRunning) return
 
-                // 자동 정지 여부 먼저 확인
-                checkAutoPause()
-
-                // 자동 정지 시간을 제외한 러닝 시간 갱신
-                updateElapsedTime()
-
                 updateRunningStats()
-
                 timerHandler.postDelayed(this, 1000L)
             }
         }
         timerHandler.post(timerRunnable)
+    }
+
+    private fun timerRunnableOrEmpty(): Runnable {
+        return if (::timerRunnable.isInitialized) {
+            timerRunnable
+        } else {
+            Runnable {}
+        }
     }
 
     // =========================
@@ -1587,7 +1508,7 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
 
     // =====================================
     // GPS 위치 업데이트 (실제 시간 계산하여 증가)
-    // =====================================
+    // =========s============================
     private fun startLocationUpdates(kakaoMap: KakaoMap) {
         // 이미 GPS 업데이트 중이면 중복 실행하지 않음
         if (isLocationUpdating) {
@@ -1633,146 +1554,204 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                         // =================================
                         if (isRunning && !isPaused) {
 
-                            // 현재 GPS 좌표의 측정 시각
                             val currentLocationTime =
                                 location.elapsedRealtimeNanos / 1_000_000L
 
-                            if (previousLocation != null && lastLocationTime != 0L) {
+                            val previous = previousLocation
 
-                                val deltaTime = currentLocationTime - lastLocationTime
-                                val distance = previousLocation!!.distanceTo(location)
-                                val currentElapsedTime = SystemClock.elapsedRealtime()
+                            // GPS 정확도 확인
+                            val isAccurate =
+                                location.hasAccuracy() && location.accuracy <= 15f
 
-                                // GPS 정확도가 적절한 경우에만 이동 판정에 사용
-                                val isAccurateLocation = location.accuracy <= 30f
-
-                                if (isAccurateLocation) {
-                                    lastReliableGpsElapsedRealtime = currentElapsedTime
-                                }
-
-                                // 기준 위치에서 누적된 이동 거리로 판단
-                                if (isAccurateLocation && deltaTime in 1L..5000L) {
-                                    if (movementAnchorLocation == null) {
-                                        movementAnchorLocation = location
-                                    }
-
-                                    val anchor = movementAnchorLocation
-                                    if (anchor != null) {
-                                        val anchorDistance = anchor.distanceTo(location)
-                                        val anchorElapsedTime =
-                                            (location.elapsedRealtimeNanos / 1_000_000L) -
-                                                    (anchor.elapsedRealtimeNanos / 1_000_000L)
-
-                                        val anchorSpeed = if (anchorElapsedTime > 0L) {
-                                            anchorDistance / (anchorElapsedTime / 1000.0)
-                                        } else {
-                                            0.0
-                                        }
-
-                                        // 작은 GPS 이동량이 누적되어 실제 이동이 확인되면 재개
-                                        val movementDetected =
-                                            anchorDistance >= 1.5f &&
-                                                    anchorElapsedTime > 0L
-
-                                        if (movementDetected) {
-                                            isMoving = true
-                                            lastMovementElapsedRealtime = currentElapsedTime
-                                            movementAnchorLocation = location
-
-                                            if (isAutoPaused) {
-                                                autoPausedDurationMillis +=
-                                                    (currentElapsedTime - autoPauseStartedElapsedRealtime)
-                                                        .coerceAtLeast(0L)
-
-                                                isAutoPaused = false
-                                                autoPauseStartedElapsedRealtime = 0L
-
-                                                Log.d("RUN_TIMER", "GPS 움직임 감지 → 자동 재개")
-                                            }
-                                        } else {
-                                            isMoving = false
-                                        }
-                                    }
-                                } else {
-                                    // GPS 정확도가 낮거나 측정 간격이 유효하지 않으면
-                                    // 기존 이동 시각을 갱신하지 않고 정지 판정도 보류
-                                    isMoving = false
-                                }
-
+                            if (!isAccurate) {
                                 Log.d(
-                                    "RUN_TIMER",
-                                    "거리=${distance}m, 기준점 누적 이동=${movementAnchorLocation?.let { it.distanceTo(location) }}m, " +
-                                            "이동=$isMoving, 자동정지=$isAutoPaused, 정확도=${location.accuracy}m"
+                                    "GPS_FILTER",
+                                    "정확도 부족으로 제외: 정확도=${location.accuracy}m"
                                 )
-
-//                                // 이전 GPS와 현재 GPS 사이의 시간
-//                                val deltaTime = currentLocationTime - lastLocationTime
-//
-//                                // 이전 GPS와 현재 GPS 사이의 거리
-//                                val distance = previousLocation!!.distanceTo(location)
-//
-//                                // GPS 위치 정확도가 너무 낮은 경우 이동 시간 계산에서 제외
-////                                val isAccurateLocation = location.accuracy <= 20f
-//                                val isAccurateLocation = location.accuracy <= 30f
-//
-//                                // GPS 간격이 지나치게 긴 경우 시간 과대 계산 방지
-////                                val isValidInterval = deltaTime in 1L..3000L
-//                                val isValidInterval = deltaTime in 1L..5000L
-//
-//                                // GPS 간격으로 계산한 추정 속도 (m/s)
-//                                val estimatedSpeed = if (deltaTime > 0L) {
-//                                    distance / (deltaTime / 1000.0)
-//                                } else {
-//                                    0.0
-//                                }
-//
-//                                // GPS 기준으로 실제 움직임 여부 판단
-////                                isMoving =
-////                                    isAccurateLocation &&
-////                                            isValidInterval &&
-////                                            distance >= 1.5f &&
-////                                            estimatedSpeed >= 0.6
-//
-//                                isMoving = isAccurateLocation &&
-//                                        isValidInterval &&
-//                                        distance >= 0.8f &&
-//                                        estimatedSpeed >= 0.3
-//
-//                                if (isMoving) {
-//                                    // 움직임이 확인된 시각 갱신
-//                                    lastMovementElapsedRealtime =
-//                                        SystemClock.elapsedRealtime()
-//
-//                                    // 자동 정지 상태였다면 재개
-//                                    if (isAutoPaused) {
-//                                        val currentTime = SystemClock.elapsedRealtime()
-//
-//                                        autoPausedDurationMillis += (
-//                                                currentTime - autoPauseStartedElapsedRealtime
-//                                                ).coerceAtLeast(0L)
-//
-//                                        isAutoPaused = false
-//                                        autoPauseStartedElapsedRealtime = 0L
-//
-//                                        Log.d("RUN_TIMER", "GPS 움직임 감지 → 자동 재개")
-//                                    }
-//                                }
-//                                Log.d("RUN_TIMER", "GPS 거리=${distance}m, " + "추정 속도=${"%.2f".format(estimatedSpeed)}m/s, " + "이동 상태=$isMoving, 자동 정지=$isAutoPaused")
-                            } else {
-                                isMoving = false
+                                continue
                             }
 
-                            // 다음 GPS 비교를 위해 현재 시각 저장
+                            if (previous != null && lastLocationTime > 0L) {
+
+                                val distance = previous.distanceTo(location)
+
+                                val deltaTime = currentLocationTime - lastLocationTime
+
+                                // 경과 시간 대비 이동 속도 계산 (m/s)
+                                val speed = if (deltaTime > 0L) {
+                                    distance / (deltaTime / 1000f)
+                                } else {
+                                    Float.MAX_VALUE
+                                }
+
+                                // 시간 간격이 유효하고 비정상적으로 빠른 이동이 아닐 때만 처리
+                                val isPlausible =
+                                    deltaTime in 1L..10_000L &&
+                                            speed <= 7.0f
+
+                                if (!isPlausible) {
+                                    Log.d(
+                                        "GPS_FILTER",
+                                        "비정상 GPS 제외: 거리=${distance}m, " +
+                                                "속도=${speed}m/s, 간격=${deltaTime}ms"
+                                    )
+
+                                    // 튄 좌표를 이전 위치로 저장하지 않음
+                                    continue
+                                }
+
+                                // GPS 이동 속도 계산
+                                val calculatedSpeed = distance / (deltaTime / 1000f)
+
+                                // Android에서 제공하는 GPS 속도
+                                val hasGpsSpeed =
+                                    android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+                                            location.hasSpeed()
+
+                                val gpsSpeed = if (hasGpsSpeed) {
+                                    location.speed
+                                } else {
+                                    0f
+                                }
+
+                                // 이동 판정 기준
+                                val isCurrentlyMoving =
+                                    gpsSpeed >= 0.6f || calculatedSpeed >= 0.6f
+
+                                // 정지 판정 기준
+                                val isCurrentlyStopped =
+                                    calculatedSpeed < 0.45f &&
+                                            (!hasGpsSpeed || gpsSpeed < 0.35f)
+
+                                if (!isMoving) {
+
+                                    // 정지 상태에서 이동이 감지되면 바로 이동 시작
+                                    if (isCurrentlyMoving) {
+                                        isMoving = true
+                                        consecutiveStoppedSamples = 0
+
+                                        Log.d("RUN_TIMER", "이동 시작 감지")
+                                    }
+                                } else {
+
+                                    // 이동 중 정지 신호가 감지되면 횟수 누적
+                                    if (isCurrentlyStopped) {
+                                        consecutiveStoppedSamples++
+                                    } else {
+                                        consecutiveStoppedSamples = 0
+                                    }
+
+                                    // 정지 신호가 2회 연속 확인되면 이동 종료
+                                    if (consecutiveStoppedSamples >= 2) {
+                                        isMoving = false
+                                        consecutiveStoppedSamples = 0
+
+                                        Log.d("RUN_TIMER", "정지 감지")
+                                    }
+                                }
+
+                                // 이동 중인 시간만 누적
+                                if (isMoving) {
+                                    elapsedTime += deltaTime
+
+                                    Log.d(
+                                        "RUN_TIMER",
+                                        "이동 중 | 누적 시간: ${elapsedTime / 1000}초 | " +
+                                                "GPS 속도: ${gpsSpeed}m/s | " +
+                                                "계산 속도: ${calculatedSpeed}m/s"
+                                    )
+                                }
+
+                                // 경로는 2m 이상 차이가 날 때만 저장
+                                val lastPath = lastPathLocation
+
+                                if (lastPath == null ||
+                                    lastPath.distanceTo(location) >= 2f
+                                ) {
+                                    runningPath.add(currentPosition)
+                                    lastPathLocation = Location(location)
+
+                                    Log.d(
+                                        "RUNNING_PATH",
+                                        "유효 경로 저장: ${location.latitude}, " +
+                                                "${location.longitude}"
+                                    )
+
+                                    drawRunningPath(kakaoMap)
+                                }
+
+                            } else {
+                                // 첫 위치는 비교 기준으로만 사용
+                                isMoving = false
+                                consecutiveStoppedSamples = 0
+                            }
+
+                            // 정상적인 GPS 좌표만 다음 비교 기준으로 저장
+                            previousLocation = Location(location)
                             lastLocationTime = currentLocationTime
-
-                            // GPS 경로 저장
-                            runningPath.add(currentPosition)
-
-                            Log.d("RUNNING_PATH", "경로 저장: ${currentPosition.latitude}, " + "${currentPosition.longitude}")
-
-                            // 지도에 러닝 경로 표시
-                            drawRunningPath(kakaoMap)
                         }
+
+//                        if (isRunning && !isPaused) {
+//                            // 현재 GPS가 들어온 시간
+//                            val currentLocationTime =
+//                                location.elapsedRealtimeNanos / 1_000_000L
+//
+//                            val previous = previousLocation
+//
+//                            if (previous != null && lastLocationTime > 0L) {
+//                                // 이전 GPS와 현재 GPS 사이의 거리
+//                                val distance = previous.distanceTo(location)
+//
+//                                // GPS 정확도가 15m 이내일 때만 이동 판단
+//                                val isAccurate = location.accuracy <= 15f
+//
+//                                // 1m 이상 이동했고 GPS 정확도도 괜찮으면 이동 중
+//                                isMoving = isAccurate && distance >= 1.0f
+//
+//                                // 이전 GPS 이후 경과한 시간
+//                                val deltaTime =
+//                                    currentLocationTime - lastLocationTime
+//
+//                                if (isMoving && deltaTime > 0L) {
+//                                    // 이동 중인 시간만 누적
+//                                    elapsedTime += deltaTime
+//
+//                                    Log.d(
+//                                        "RUN_TIMER",
+//                                        "이동 감지: ${distance}m / " +
+//                                                "시간 추가: ${deltaTime}ms / " +
+//                                                "누적 시간: ${elapsedTime}ms"
+//                                    )
+//                                } else {
+//                                    Log.d(
+//                                        "RUN_TIMER",
+//                                        "정지 또는 GPS 정확도 부족: " +
+//                                                "거리=${distance}m / " +
+//                                                "정확도=${location.accuracy}m / " +
+//                                                "누적 시간=${elapsedTime}ms"
+//                                    )
+//                                }
+//                            } else {
+//                                // 첫 GPS 위치는 비교 대상이 없으므로 시간 누적 안 함
+//                                isMoving = false
+//                            }
+//
+//                            // 다음 GPS와 비교할 시간 저장
+//                            lastLocationTime = currentLocationTime
+//
+//                            // GPS 경로 저장
+//                            runningPath.add(currentPosition)
+//
+//                            Log.d(
+//                                "RUNNING_PATH",
+//                                "경로 저장: ${currentPosition.latitude}, " +
+//                                        "${currentPosition.longitude}"
+//                            )
+//
+//                            // 지도에 러닝 경로 표시
+//                            drawRunningPath(kakaoMap)
+//                        }
+
 
                         // 카메라가 현위치를 따라가도록 설정된 경우에만 이동
                         if (isCameraFollowingCurrentLocation) {
@@ -1795,36 +1774,107 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                         // =====================
                         // 러닝 중일 경우 거리 계산
                         // =====================
+
                         if (isRunning && !isPaused) {
-                            previousLocation?.let { previous ->
-                                // 이전 위치 → 현재 위치 거리
-                                val distance = previous.distanceTo(location)
 
-                                // 2m 이하 GPS 오차 필터링
-                                if (distance >= 2) {
-                                    // 총 이동 거리 누적
+                            val previousDistance = previousDistanceLocation
+
+                            // 이전 GPS와 현재 GPS 사이의 거리
+                            if (previousDistance != null) {
+                                val distance = previousDistance.distanceTo(location)
+
+                                // GPS 측정 간격
+                                val deltaTime =
+                                    (location.elapsedRealtimeNanos -
+                                            previousDistance.elapsedRealtimeNanos) / 1_000_000L
+
+                                // 이동 속도 계산
+                                val speed = if (deltaTime > 0L) {
+                                    distance / (deltaTime / 1000f)
+                                } else {
+                                    Float.MAX_VALUE
+                                }
+
+                                // 기존 GPS 유효성 검사 유지
+                                val isValidDistance =
+                                    location.hasAccuracy() &&
+                                            location.accuracy <= 15f &&
+                                            deltaTime in 1L..10_000L &&
+                                            speed <= 7.0f
+
+                                // 이동 중이고, 0.5m 이상 이동했을 때 거리 누적
+                                if (isValidDistance && isMoving && distance >= 0.5f) {
                                     totalDistance += distance
-                                    Log.d("RUN_DISTANCE", "이동 거리 추가: ${distance}m / " + "총 거리 : ${totalDistance}m")
 
-                                    val targetMeters = if (!isRecommendedMode) targetDistanceKm?.times(1000.0) else null
+                                    Log.d(
+                                        "RUN_DISTANCE",
+                                        "유효 거리 추가: ${distance}m / " +
+                                                "총 거리=${totalDistance}m"
+                                    )
+
+                                    val targetMeters =
+                                        if (!isRecommendedMode) targetDistanceKm?.times(1000.0)
+                                        else null
+
                                     if (
                                         !hasShownTargetDistanceNotice &&
                                         targetMeters != null &&
                                         totalDistance >= targetMeters
                                     ) {
                                         hasShownTargetDistanceNotice = true
+
                                         Toast.makeText(
                                             requireContext(),
                                             "목표 거리 달성! 원하는 만큼 더 달려도 좋아요.",
                                             Toast.LENGTH_LONG
                                         ).show()
                                     }
+
                                     updateRunningStats()
                                 } else {
-                                    Log.d("RUN_DISTANCE", "GPS 오차 무시: ${distance}m / " + "총 거리 : ${totalDistance}m")
+                                    Log.d(
+                                        "RUN_DISTANCE",
+                                        "GPS 오차 또는 작은 이동으로 제외: ${distance}m"
+                                    )
                                 }
                             }
+
+                            // 정확도가 유효한 GPS 위치만 다음 비교 기준으로 저장
+                            if (location.hasAccuracy() && location.accuracy <= 15f) {
+                                previousDistanceLocation = Location(location)
+                            }
                         }
+
+//                        if (isRunning && !isPaused) {
+//                            previousLocation?.let { previous ->
+//                                // 이전 위치 → 현재 위치 거리
+//                                val distance = previous.distanceTo(location)
+//
+//                                // 2m 이하 GPS 오차 필터링
+//                                if (distance >= 2) {
+//                                    // 총 이동 거리 누적
+//                                    totalDistance += distance
+//                                    Log.d("RUN_DISTANCE", "이동 거리 추가: ${distance}m / " + "총 거리 : ${totalDistance}m")
+//
+//                                    val targetMeters = if (!isRecommendedMode) targetDistanceKm?.times(1000.0) else null
+//                                    if (
+//                                        !hasShownTargetDistanceNotice &&
+//                                        targetMeters != null &&
+//                                        totalDistance >= targetMeters
+//                                    ) {
+//                                        hasShownTargetDistanceNotice = true
+//                                        Toast.makeText(
+//                                            requireContext(),
+//                                            "목표 거리 달성! 원하는 만큼 더 달려도 좋아요.",
+//                                            Toast.LENGTH_LONG
+//                                        ).show()
+//                                    }
+//                                    updateRunningStats()
+//                                } else {
+//                                    Log.d("RUN_DISTANCE", "GPS 오차 무시: ${distance}m / " + "총 거리 : ${totalDistance}m")
+//                                }
+//                            }
+//                        }
                         // =====================
                         // 고도 상승 계산
                         // =====================
@@ -1846,8 +1896,8 @@ class FragmentRunning : Fragment(R.layout.fragment_running) {
                         // =====================
                         // 현재 위치를 이전 위치로 저장
                         // =====================
-                        previousLocation = location
-                        Log.d("PREVIOUS_GPS", "저장된 이전 위치 → " + "위도: ${previousLocation?.latitude}, " + "경도: ${previousLocation?.longitude}")
+//                        previousLocation = location
+//                        Log.d("PREVIOUS_GPS", "저장된 이전 위치 → " + "위도: ${previousLocation?.latitude}, " + "경도: ${previousLocation?.longitude}")
                     }
                 }
             }

@@ -56,7 +56,8 @@ class FragmentHome : Fragment(R.layout.fragment_home) {
 //                .getDatabase(requireContext())
 //                .runningRecordDao()
 //
-//            dao.deleteRecord(3L)
+//            dao.deleteRecord(35L)
+//            dao.deleteRecord(38L)
 //
 //            // 삭제 후 DB에 남아 있는 기록 확인
 //            val remainingRecords = dao.getAllRecords()

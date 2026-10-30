@@ -372,6 +372,14 @@ class RunningResultActivity : AppCompatActivity() {
 
         // 상승고도 데이터 값 받기
         elevationGainTv.text = String.format("%.0f m", elevationGain)
+
+        Log.d(
+            "RUN_SPEED_CHECK",
+            "총 거리(m)=$totalDistance, " +
+                    "거리(km)=$distanceKm, " +
+                    "경과 시간(ms)=$elapsedTime, " +
+                    "경과 시간(h)=${elapsedTime / 3600000.0}"
+        )
     }
 
     // =========================
